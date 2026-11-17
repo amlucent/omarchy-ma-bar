@@ -8,6 +8,26 @@ sleep timer and more.
 *An independent client. Not affiliated with or endorsed by the Music Assistant
 project or the Omarchy project.*
 
+## Screenshots
+
+| Now playing and Home | Podcasts: unfinished and newest first |
+| --- | --- |
+| ![Now playing and Home](docs/screenshots/now-playing.png) | ![Podcasts tab](docs/screenshots/podcasts.png) |
+
+| Speakers and groups | Play queue |
+| --- | --- |
+| ![Speakers and groups](docs/screenshots/speakers.png) | ![Play queue](docs/screenshots/queue.png) |
+
+| Audiobook with chapters | Chapters list |
+| --- | --- |
+| ![Audiobook controls](docs/screenshots/audiobook.png) | ![Chapters list](docs/screenshots/chapters.png) |
+
+| Bookmarks (Audiobookshelf) | Sleep timer |
+| --- | --- |
+| ![Bookmarks](docs/screenshots/bookmarks.png) | ![Sleep timer](docs/screenshots/sleep-timer.png) |
+
+*Screenshots use made-up demo data (see `tools/demo_server.py`).*
+
 ## Quick start
 
 1. **Install** and enable the plugin:
@@ -209,6 +229,13 @@ omarchy-shell music-assistant sleepCancel
 python3 -I -m unittest discover -s tests -v
 omarchy plugin validate .
 ```
+
+`tools/demo_server.py` is a small fake Music Assistant + Audiobookshelf server with
+made-up data, handy for trying the UI without a real server and for retaking the
+screenshots without exposing a real library. Run it with
+`python3 tools/demo_server.py` and point the plugin at `http://127.0.0.1:8099` with any
+token. `curl localhost:8099/__demo/mode/book` (or `podcast`, `music`) changes what is
+"playing".
 
 `MA_PLUGIN_URL` and `MA_PLUGIN_TOKEN` (and `MA_PLUGIN_ABS_URL` / `MA_PLUGIN_ABS_TOKEN`)
 environment variables override the saved settings for local testing only.
