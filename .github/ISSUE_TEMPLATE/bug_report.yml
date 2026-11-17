@@ -1,0 +1,47 @@
+name: Bug report
+description: Something doesn't work or looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! Please don't paste tokens, server addresses or anything private.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: From `manifest.json`, or the tag you installed.
+    validations:
+      required: true
+  - type: input
+    id: ma-version
+    attributes:
+      label: Music Assistant server version
+      placeholder: e.g. 2.10.x
+    validations:
+      required: true
+  - type: input
+    id: players
+    attributes:
+      label: Player type(s) involved
+      description: Sonos, AirPlay, Chromecast, Companion app (Sendspin), a saved group, and so on.
+  - type: input
+    id: system
+    attributes:
+      label: Omarchy version and CPU architecture
+      placeholder: e.g. Omarchy 4.x, x86_64 or aarch64
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Steps to reproduce help a lot. Screenshots are welcome, but blur names you'd rather not share.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: |
+        Run `quickshell list --all` to find your instance id, then `quickshell log -i <id> -t 80`.
+        Remove anything private before pasting.
+      render: shell

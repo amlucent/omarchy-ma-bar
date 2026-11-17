@@ -28,6 +28,15 @@ project or the Omarchy project.*
 
 *Screenshots use made-up demo data (see `tools/demo_server.py`).*
 
+## Status
+
+**Beta (v0.9).** It is used daily and has a unit-test suite, but it has been tried on one
+setup so far: Music Assistant 2.10 with Sonos and AirPlay players, saved groups, and an
+Audiobookshelf library. Other player types (Chromecast, DLNA, the Companion app's own
+player) should work because everything goes through Music Assistant, but are less tested.
+Please [open an issue](../../issues/new/choose) if something misbehaves, and include your
+plugin and Music Assistant versions.
+
 ## Quick start
 
 1. **Install** and enable the plugin:
