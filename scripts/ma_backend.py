@@ -529,7 +529,7 @@ def resolve_queue(base_url, token, configured="", call=api_call):
         return configured
     host = socket.gethostname().split(".")[0].lower()
     for player in list_players(base_url, token, call=call):
-        if player["provider"] == "sendspin" and player["available"] \
+        if player["provider"] in ("sendspin", "universal_player") and player["available"] \
                 and player["name"].lower().split(".")[0] == host:
             return player["id"]
     return ""

@@ -94,10 +94,75 @@ That's all most people need. Audiobookshelf is optional, see
   the Secret Service, such as gnome-keyring. Your tokens are stored there.
 - Optional: the [Music Assistant Companion](https://www.music-assistant.io/companion-app/)
   app, but **only** if you want to play audio on this computer's own speakers. It
-  registers this computer as a player in Music Assistant. Without it the plugin
-  works fully with every other player on your server (Sonos, AirPlay, Chromecast and
-  so on). If no player has been chosen and this computer has none, the dropdown opens
-  its player picker for you.
+  registers this computer as a player in Music Assistant, and it is the **supported**
+  way to do that. Without it the plugin works fully with every other player on your
+  server (Sonos, AirPlay, Chromecast and so on). If no player has been chosen and this
+  computer has none, the dropdown opens its player picker for you. There is also an
+  [experimental lightweight alternative](#play-on-this-computer-without-the-companion-app-experimental).
+
+## Play on this computer without the Companion app (experimental)
+
+The plugin only *controls* Music Assistant; audio is played by a "player". The Companion
+app is the supported way to make this computer one. If you'd rather not install it, the
+small command-line [Sendspin](https://github.com/Sendspin/sendspin-cli) player can do the
+same job. This was tested once, on an Apple Silicon laptop running Omarchy with PipeWire
+and Music Assistant 2.10 (audio played through the normal system output). It is **not
+supported** yet and may need adjusting on your setup.
+
+1. **Install the player** (needs `uv` and `portaudio`, both normally present on Omarchy):
+
+   ```
+   uv tool install sendspin
+   ```
+
+2. **Test it in a terminal.** Replace the address with your Music Assistant server. The port
+   is Music Assistant's Sendspin port, `8927` by default:
+
+   ```
+   cd ~/.config/omarchy/plugins/music-assistant
+   ~/.local/share/uv/tools/sendspin/bin/python tools/sendspin-pipewire.py ws://YOUR-SERVER:8927/sendspin
+   ```
+
+   A player named after this computer's hostname should appear in Music Assistant. Keep the
+   volume low for the first test.
+
+3. **Run it in the background** with a systemd user service,
+   `~/.config/systemd/user/sendspin.service`:
+
+   ```
+   [Unit]
+   Description=Sendspin player for Music Assistant
+   After=network-online.target pipewire.service
+
+   [Service]
+   ExecStart=%h/.local/share/uv/tools/sendspin/bin/python %h/.config/omarchy/plugins/music-assistant/tools/sendspin-pipewire.py ws://YOUR-SERVER:8927/sendspin
+   Restart=on-failure
+   RestartSec=5
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   ```
+   systemctl --user daemon-reload
+   systemctl --user enable --now sendspin.service
+   ```
+
+4. In the dropdown, choose the player named after your computer. If no player is chosen,
+   the plugin finds it automatically.
+
+Notes and known problems:
+
+- **Why `--url` and a wrapper script?** Sendspin normally finds servers by mDNS, which does
+  not cross subnets or VLANs, so the player connects to the server directly. On PipeWire,
+  Sendspin can also hang while testing which audio formats the output supports;
+  `tools/sendspin-pipewire.py` skips that test. It relies on Sendspin's internals, so a
+  Sendspin update may break it.
+- The player shows up in Music Assistant as a "universal player", and it is created the
+  first time it connects. Delete it in Music Assistant's player settings if you stop using it.
+- Using the sound server's normal device (`pipewire`) matters: on some hardware, such as
+  Apple Silicon laptops, the speakers depend on a PipeWire filter, so avoid pointing the
+  player at a raw hardware device.
 
 ## Features
 
@@ -248,6 +313,19 @@ omarchy-shell music-assistant sleepCancel
 - **A track won't play**: playback goes through your Music Assistant server, so a failing
   provider there (for example Spotify) fails here too. Try a library track to confirm.
 - **QML edits don't show up** (development): run `omarchy-restart-shell`.
+
+## Roadmap
+
+Ideas, in no particular order. If one matters to you, [say so in an issue](../../issues) so
+it can be prioritised:
+
+- **A built-in "This computer" switch** that sets up and manages the lightweight local
+  player above for you (install check, background service, status, test sound), so the
+  Companion app is no longer needed. See the
+  [tracking issue](../../issues?q=is%3Aissue+%22This+computer%22).
+- Album and artist pages, and keyboard navigation of the lists.
+- Pagination for very large libraries (the lists load the first 60 items today).
+- Chapters and bookmarks for podcast episodes.
 
 ## Privacy and security
 

@@ -458,6 +458,11 @@ class ResolveQueueTests(unittest.TestCase):
         with mock.patch("ma_backend.socket.gethostname", return_value="mybox"):
             self.assertEqual(ma.resolve_queue("h", "t", "", call=call), "c1")
 
+    def test_matches_a_universal_player_named_after_this_host(self):
+        players = [{"player_id": "u1", "display_name": "mybox", "provider": "universal_player", "available": True}]
+        with mock.patch("ma_backend.socket.gethostname", return_value="mybox"):
+            self.assertEqual(ma.resolve_queue("h", "t", "", call=make_call({"players/all": players})), "u1")
+
     def test_no_match_returns_empty(self):
         call = make_call({"players/all": self.PLAYERS})
         with mock.patch("ma_backend.socket.gethostname", return_value="other"):
