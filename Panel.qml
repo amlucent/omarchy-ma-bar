@@ -79,6 +79,8 @@ Panel {
   property string speakersLeaderName: ""
   property bool speakersCanGroup: true
   property string speakersError: ""
+  property bool needsPlayer: false
+  property bool pickerPrompted: false
   property bool speakersIsGroup: false
   property bool mixedGroupsAvailable: false
   property string groupKindChoice: ""
@@ -342,6 +344,14 @@ Panel {
     root.menuY = y
   }
 
+  // With no player chosen, open the picker once per time the panel is opened.
+  function promptPicker() {
+    if (!root.needsPlayer || !root.opened || root.pickerPrompted || root.players.length === 0 || root.settingsView) return
+    root.pickerPrompted = true
+    Qt.callLater(function() { playerPicker.open() })
+  }
+  onOpenedChanged: if (!root.opened) root.pickerPrompted = false
+
   function playersProcRun() { playersProc.running = true }
 
   function refreshAll() {
@@ -464,7 +474,12 @@ Panel {
       onStreamFinished: {
         try {
           var r = JSON.parse(text)
-          if (r.error) return
+          if (r.error) {
+            root.needsPlayer = r.code === "no_player"
+            if (root.needsPlayer) root.promptPicker()
+            return
+          }
+          root.needsPlayer = false
           root.state = r.state || "idle"
           root.playerId = r.id || root.playerId
           root.groupSize = r.groupSize || 1
@@ -635,6 +650,7 @@ Panel {
             return sa !== sb ? sa - sb : a.name.localeCompare(b.name)
           })
           root.playerEntries = list
+          Qt.callLater(root.promptPicker)
           root.players = list.map(function(p) {
             var extra = p.isGroup ? "  (group)" : (p.members && p.members.length > 1 ? "  +" + (p.members.length - 1) : "")
             return { value: p.id, label: p.name + extra, base: p.name }
@@ -755,6 +771,7 @@ Panel {
         }
 
         Dropdown {
+          id: playerPicker
           visible: root.configured && !root.settingsView && root.players.length > 0
           Layout.preferredWidth: Style.space(190)
           showLabel: false
@@ -983,7 +1000,7 @@ Panel {
             Text {
               textFormat: Text.PlainText
               Layout.fillWidth: true
-              text: root.hasItem ? root.title : "Nothing playing"
+              text: root.hasItem ? root.title : (root.needsPlayer ? "Choose a player" : "Nothing playing")
               color: root.fg
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
@@ -993,7 +1010,7 @@ Panel {
             Text {
               textFormat: Text.PlainText
               Layout.fillWidth: true
-              text: root.hasItem ? root.subtitle : (root.playerName !== "" ? "on " + root.playerName + (root.groupSize > 1 ? " +" + (root.groupSize - 1) : "") : "")
+              text: root.hasItem ? root.subtitle : (root.needsPlayer ? "Pick where to play from the list at the top" : root.playerName !== "" ? "on " + root.playerName + (root.groupSize > 1 ? " +" + (root.groupSize - 1) : "") : "")
               color: root.mutedFg
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall

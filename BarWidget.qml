@@ -15,6 +15,7 @@ BarWidget {
 
   property bool configured: true
   property bool reachable: true
+  property bool needsPlayer: false
   property string state: "idle"
   property string title: ""
   property string subtitle: ""
@@ -50,6 +51,7 @@ BarWidget {
 
   readonly property string tooltipText: {
     if (!root.configured) return "Music Assistant: not connected (see README)"
+    if (root.needsPlayer) return "Music Assistant: choose a player (open the dropdown)"
     if (!root.reachable) return "Music Assistant: server unreachable"
     if (root.title === "") return "Music Assistant"
     if (root.sleeping) return "Sleep timer: pausing in " + root.formatLeft(root.sleepLeft)
@@ -164,12 +166,22 @@ BarWidget {
         try {
           var parsed = JSON.parse(text)
           if (parsed.error) {
+            if (parsed.code === "no_player") {
+              root.configured = true
+              root.reachable = true
+              root.needsPlayer = true
+              root.state = "idle"
+              root.title = ""
+              return
+            }
+            root.needsPlayer = false
             root.configured = parsed.error !== "not connected yet"
             root.reachable = root.configured ? false : true
             return
           }
           root.configured = true
           root.reachable = true
+          root.needsPlayer = false
           root.state = parsed.state || "idle"
           root.title = parsed.item ? parsed.item.name : ""
           root.subtitle = parsed.item ? parsed.item.subtitle : ""

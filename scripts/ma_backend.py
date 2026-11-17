@@ -49,6 +49,10 @@ class MaError(Exception):
     """A failure the UI can show to the user as-is."""
 
 
+class NoPlayerError(MaError):
+    """No player is chosen and this computer has none of its own."""
+
+
 # --------------------------------------------------------------------- config
 
 def load_config(path=None):
@@ -882,7 +886,7 @@ def main(argv):
         if cmd in ("now", "play", "ctl", "queue", "enqueue", "queue-remove", "queue-move", "queue-jump", "queue-clear", "bookmark-go") and not configured and not (cmd == "now" and rest):
             queue_id = resolve_queue(base, token)
             if not queue_id:
-                raise MaError("no player selected and this computer has no Music Assistant player")
+                raise NoPlayerError("no player selected and this computer has no Music Assistant player")
 
         if queue_id and cmd in ("play", "ctl", "queue", "enqueue", "queue-remove", "queue-move", "queue-jump", "queue-clear", "bookmark-go"):
             queue_id = leader_of(base, token, queue_id)[0]
@@ -972,6 +976,8 @@ def main(argv):
                 raise MaError("missing control action")
             _emit(control(base, token, queue_id, rest[0], rest[1:]))
         _emit({"error": "unknown command: %s" % cmd}, 1)
+    except NoPlayerError as err:
+        _emit({"error": str(err), "code": "no_player"}, 1)
     except MaError as err:
         _emit({"error": str(err)}, 1)
     except (IndexError, ValueError):
