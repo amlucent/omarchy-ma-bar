@@ -33,7 +33,7 @@ project or the Omarchy project.*
 1. **Install** and enable the plugin:
 
    ```
-   omarchy plugin add <this-repo-url> --enable
+   omarchy plugin add https://github.com/amlucent/omarchy-music-assistant --enable
    ```
 
    If **Music Assistant** doesn't appear in the bar, add it in the shell's bar settings.
