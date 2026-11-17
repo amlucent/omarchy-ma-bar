@@ -69,6 +69,30 @@ Panel {
   property real menuX: 0
   property real menuY: 0
 
+  // ---- chapters, bookmarks, Audiobookshelf ---------------------------------
+  property bool chaptersView: false
+  property bool bookmarksView: false
+  readonly property bool listsHidden: queueView || chaptersView || bookmarksView
+  property string itemUri: ""
+  property string detailUri: ""
+  property var chapters: []
+  property var bookmarks: []
+  property string bookmarkError: ""
+  property bool absConfigured: false
+  property string absUrl: ""
+  property string absSetupError: ""
+  property bool absSetupBusy: false
+  property string pendingAbsToken: ""
+  readonly property bool isBook: itemType === "audiobook"
+  readonly property int chapterIndex: {
+    var idx = -1
+    for (var i = 0; i < root.chapters.length; i++) {
+      if (root.chapters[i].start <= root.position + 0.5) idx = i
+      else break
+    }
+    return idx
+  }
+
   readonly property var tabOptions: [
     { value: "home", label: "Home", tooltip: "Continue and recent" },
     { value: "albums", label: "Albums" },
@@ -100,10 +124,71 @@ Panel {
   function goBack() {
     if (root.menuItem) { root.menuItem = null; return true }
     if (root.settingsView && root.configured) { root.settingsView = false; return true }
-    if (root.queueView) { root.queueView = false; return true }
+    if (root.listsHidden) { root.showView(""); return true }
     if (root.openPodcast) { root.openPodcast = null; root.loadList(); return true }
     if (root.query !== "") { searchField.text = ""; return true }
     return false
+  }
+
+  function showView(name) {
+    root.queueView = name === "queue"
+    root.chaptersView = name === "chapters"
+    root.bookmarksView = name === "bookmarks"
+  }
+  function toggleView(name) {
+    var open = (name === "queue" && root.queueView) || (name === "chapters" && root.chaptersView)
+      || (name === "bookmarks" && root.bookmarksView)
+    root.showView(open ? "" : name)
+  }
+
+  function seekTo(seconds) { root.position = seconds; root.ctl(["seek", String(Math.round(seconds))]) }
+
+  function chapterEnd(i) {
+    var c = root.chapters[i]
+    return c.end !== null && c.end !== undefined ? c.end : (i + 1 < root.chapters.length ? root.chapters[i + 1].start : root.duration)
+  }
+
+  function skipChapter(direction) {
+    if (root.chapters.length === 0) return
+    var i = root.chapterIndex
+    if (direction > 0) {
+      if (i + 1 < root.chapters.length) root.seekTo(root.chapters[i + 1].start)
+    } else if (i >= 0 && root.position - root.chapters[i].start > 3) {
+      root.seekTo(root.chapters[i].start)       // restart the chapter first, like a CD player
+    } else if (i > 0) {
+      root.seekTo(root.chapters[i - 1].start)
+    } else {
+      root.seekTo(0)
+    }
+  }
+
+  function loadBookmarks() {
+    if (!root.isBook || !root.absConfigured || root.itemUri === "") { root.bookmarks = []; return }
+    root.bookmarkError = ""
+    bookmarksProc.command = root.backend(["bookmarks", root.itemUri])
+    bookmarksProc.running = true
+  }
+
+  function addBookmark() {
+    if (!root.isBook || root.itemUri === "") return
+    bookmarkActProc.command = root.backend(["bookmark-add", root.itemUri, String(Math.floor(root.position)), bookmarkTitle.text.trim()])
+    bookmarkActProc.running = true
+    bookmarkTitle.text = ""
+    root.showNotice("Bookmark added at " + root.formatTime(root.position))
+    bookmarkReload.restart()
+  }
+
+  function deleteBookmark(b) {
+    bookmarkActProc.command = root.backend(["bookmark-delete", root.itemUri, String(b.time)])
+    bookmarkActProc.running = true
+    bookmarkReload.restart()
+  }
+
+  function goBookmark(b) {
+    bookmarkActProc.command = root.backend(["bookmark-go", root.itemUri, String(b.time)])
+    bookmarkActProc.running = true
+    root.showNotice("Jumping to " + root.formatTime(b.time))
+    refreshSoon.restart()
   }
 
   function showNotice(text) { root.notice = text; noticeTimer.restart() }
@@ -136,6 +221,7 @@ Panel {
   }
 
   function refreshAll() {
+    absStatusProc.running = true
     if (!root.configured) { statusProc.running = true; return }
     root.pollNow()
     playersProc.running = true
@@ -200,6 +286,8 @@ Panel {
 
   onTabChanged: { root.openPodcast = null; root.loadList() }
   onQueueViewChanged: if (root.queueView) root.loadQueue()
+  onBookmarksViewChanged: if (root.bookmarksView) root.loadBookmarks()
+  onAbsConfiguredChanged: if (root.bookmarksView) root.loadBookmarks()
   onQueryChanged: searchDebounce.restart()
 
   Timer { id: searchDebounce; interval: 350; onTriggered: { root.openPodcast = null; root.loadList() } }
@@ -211,6 +299,7 @@ Panel {
     repeat: true
     onTriggered: { root.pollNow(); if (root.queueView) root.loadQueue() }
   }
+  Timer { id: bookmarkReload; interval: 900; onTriggered: root.loadBookmarks() }
   Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice = "" }
   Timer { id: queueRefresh; interval: 700; onTriggered: { root.loadQueue(); root.pollNow() } }
   // Smooth the progress bar between server updates.
@@ -221,7 +310,7 @@ Panel {
     onTriggered: if (root.duration <= 0 || root.position < root.duration) root.position += root.speed
   }
 
-  Component.onCompleted: statusProc.running = true
+  Component.onCompleted: { statusProc.running = true; absStatusProc.running = true }
 
   // ---- backend processes --------------------------------------------------
   Process {
@@ -256,10 +345,24 @@ Panel {
             root.title = r.item.name || ""
             root.subtitle = r.item.subtitle || ""
             root.itemType = r.item.type || ""
+            root.itemUri = r.item.uri || ""
             root.cover = r.item.cover || ""
             root.duration = r.item.duration || 0
           } else {
             root.title = ""; root.subtitle = ""; root.itemType = ""; root.cover = ""; root.duration = 0
+            root.itemUri = ""
+          }
+          // Chapters (and the book's Audiobookshelf id) load once per audiobook.
+          if (root.isBook && root.itemUri !== "" && root.itemUri !== root.detailUri) {
+            root.detailUri = root.itemUri
+            root.chapters = []
+            root.bookmarks = []
+            detailsProc.command = root.backend(["details", "audiobook", root.itemUri])
+            detailsProc.running = true
+          } else if (!root.isBook && root.detailUri !== "") {
+            root.detailUri = ""
+            root.chapters = []
+            root.bookmarks = []
           }
           root.position = r.elapsed || 0
         } catch (e) {}
@@ -269,6 +372,64 @@ Panel {
 
   Process { id: ctlProc }
   Process { id: queueActProc }
+  Process { id: bookmarkActProc }
+  Process {
+    id: detailsProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var r = JSON.parse(text)
+          root.chapters = r.error ? [] : (r.chapters || [])
+          if (root.bookmarksView) root.loadBookmarks()
+        } catch (e) { root.chapters = [] }
+      }
+    }
+  }
+  Process {
+    id: bookmarksProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var r = JSON.parse(text)
+          if (r.error) { root.bookmarkError = r.error; root.bookmarks = [] }
+          else root.bookmarks = r
+        } catch (e) { root.bookmarkError = "Could not read your bookmarks" }
+      }
+    }
+  }
+  Process {
+    id: absStatusProc
+    command: root.backend(["abs-status"])
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var r = JSON.parse(text)
+          root.absConfigured = r.configured === true
+          root.absUrl = r.absUrl || ""
+        } catch (e) {}
+      }
+    }
+  }
+  Process {
+    id: absSetupProc
+    stdinEnabled: true
+    onStarted: { write(root.pendingAbsToken + "\n"); root.pendingAbsToken = "" }
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.absSetupBusy = false
+        try {
+          var r = JSON.parse(text)
+          if (r.ok) { root.absConfigured = true; root.absUrl = r.absUrl; absTokenField.text = ""; root.absSetupError = "" }
+          else root.absSetupError = r.error || "Connection failed"
+        } catch (e) { root.absSetupError = "Unexpected response from the plugin" }
+      }
+    }
+  }
+  Process {
+    id: absDisconnectProc
+    command: root.backend(["abs-disconnect"])
+    stdout: StdioCollector { onStreamFinished: { root.absConfigured = false; root.absUrl = ""; root.bookmarks = [] } }
+  }
   Process {
     id: queueProc
     stdout: StdioCollector {
@@ -383,6 +544,7 @@ Panel {
     onTextKey: function(t) { if (t === "/") searchField.forceActiveFocus() }
 
     ColumnLayout {
+      id: mainCol
       anchors.fill: parent
       spacing: Style.space(12)
 
@@ -523,6 +685,77 @@ Panel {
             }
           }
         }
+
+        PanelSectionHeader {
+          visible: root.configured
+          text: "AUDIOBOOKSHELF  (for bookmarks)"
+          foreground: root.fg
+          fontFamily: root.fontFamily
+        }
+        Text {
+          textFormat: Text.PlainText
+          visible: root.configured
+          Layout.fillWidth: true
+          wrapMode: Text.WordWrap
+          text: root.absConfigured ? "Connected to " + root.absUrl
+            : "Optional. Create an API token in Audiobookshelf (Settings > Users) to see and add your bookmarks."
+          color: root.mutedFg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        TextField {
+          id: absUrlField
+          visible: root.configured && !root.absConfigured
+          Layout.fillWidth: true
+          placeholderText: "https://your-audiobookshelf"
+          foreground: root.fg
+          font.family: root.fontFamily
+        }
+        TextField {
+          id: absTokenField
+          visible: root.configured && !root.absConfigured
+          Layout.fillWidth: true
+          placeholderText: "Audiobookshelf API token"
+          password: true
+          foreground: root.fg
+          font.family: root.fontFamily
+        }
+        Text {
+          textFormat: Text.PlainText
+          visible: root.absSetupError !== ""
+          Layout.fillWidth: true
+          wrapMode: Text.WordWrap
+          text: root.absSetupError
+          color: Color.accent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        RowLayout {
+          visible: root.configured
+          Button {
+            visible: !root.absConfigured
+            text: root.absSetupBusy ? "Connecting..." : "Connect Audiobookshelf"
+            bordered: true
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            onClicked: {
+              if (root.absSetupBusy) return
+              root.absSetupError = ""
+              root.absSetupBusy = true
+              root.pendingAbsToken = absTokenField.text.trim()
+              absSetupProc.command = root.backend(["abs-setup", absUrlField.text.trim()])
+              absSetupProc.running = true
+            }
+          }
+          Button {
+            visible: root.absConfigured
+            text: "Disconnect Audiobookshelf"
+            bordered: true
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            onClicked: absDisconnectProc.running = true
+          }
+        }
       }
 
       // ---- now playing ----------------------------------------------------
@@ -637,8 +870,65 @@ Panel {
             iconText: "󰲸"
             tooltipText: root.queueView ? "Back to the library" : "Show the play queue"
             foreground: root.queueView ? Color.accent : root.fg
-            onClicked: root.queueView = !root.queueView
+            onClicked: root.toggleView("queue")
           }
+        }
+
+        // Audiobooks: chapter navigation and bookmarks.
+        RowLayout {
+          visible: root.isBook
+          Layout.fillWidth: true
+          spacing: Style.spacing.md
+          PanelActionButton {
+            iconText: "󰒮"
+            tooltipText: "Previous chapter"
+            foreground: root.fg
+            onClicked: root.skipChapter(-1)
+          }
+          Text {
+            textFormat: Text.PlainText
+            Layout.fillWidth: true
+            horizontalAlignment: Text.AlignHCenter
+            text: root.chapterIndex >= 0
+              ? "Chapter " + (root.chapterIndex + 1) + " of " + root.chapters.length
+                + (root.chapters[root.chapterIndex].name !== "" && !/^chapter\s*\d+$/i.test(root.chapters[root.chapterIndex].name)
+                    ? "  ·  " + root.chapters[root.chapterIndex].name : "")
+              : (root.chapters.length > 0 ? root.chapters.length + " chapters" : "No chapters")
+            color: root.mutedFg
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            elide: Text.ElideRight
+          }
+          PanelActionButton {
+            iconText: "󰒭"
+            tooltipText: "Next chapter"
+            foreground: root.fg
+            onClicked: root.skipChapter(1)
+          }
+        }
+        RowLayout {
+          visible: root.isBook
+          Layout.fillWidth: true
+          spacing: Style.spacing.md
+          Item { Layout.fillWidth: true }
+          Button {
+            text: "Chapters"
+            bordered: true
+            selected: root.chaptersView
+            enabled: root.chapters.length > 0
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            onClicked: root.toggleView("chapters")
+          }
+          Button {
+            text: "Bookmarks"
+            bordered: true
+            selected: root.bookmarksView
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            onClicked: root.toggleView("bookmarks")
+          }
+          Item { Layout.fillWidth: true }
         }
 
         RowLayout {
@@ -689,7 +979,7 @@ Panel {
 
       // ---- tabs + search --------------------------------------------------
       ButtonGroup {
-        visible: root.configured && !root.settingsView && !root.queueView && root.openPodcast === null
+        visible: root.configured && !root.settingsView && !root.listsHidden && root.openPodcast === null
         Layout.fillWidth: true
         options: root.tabOptions
         value: root.tab
@@ -701,7 +991,7 @@ Panel {
 
       TextField {
         id: searchField
-        visible: root.configured && !root.settingsView && !root.queueView && root.openPodcast === null
+        visible: root.configured && !root.settingsView && !root.listsHidden && root.openPodcast === null
         Layout.fillWidth: true
         placeholderText: "Search music, audiobooks and podcasts  ( / )"
         foreground: root.fg
@@ -711,7 +1001,7 @@ Panel {
 
       Text {
         textFormat: Text.PlainText
-        visible: root.configured && !root.settingsView && !root.queueView && (root.listError !== "" || (!root.loading && root.rows.length === 0))
+        visible: root.configured && !root.settingsView && !root.listsHidden && (root.listError !== "" || (!root.loading && root.rows.length === 0))
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
         text: root.listError !== "" ? root.listError : "Nothing here"
@@ -723,7 +1013,7 @@ Panel {
       // ---- list -----------------------------------------------------------
       ListView {
         id: list
-        visible: root.configured && !root.settingsView && !root.queueView
+        visible: root.configured && !root.settingsView && !root.listsHidden
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
@@ -793,7 +1083,8 @@ Panel {
                     if (del.isHeader) return ""
                     var m = del.modelData, parts = []
                     parts.push(m.subtitle !== "" ? m.subtitle : (root.typeLabels[m.type] || ""))
-                    if (m.duration) parts.push(root.formatTime(m.duration))
+                    if (m.resume && m.duration && m.resume < m.duration) parts.push(root.formatTime(m.duration - m.resume) + " left")
+                    else if (m.duration) parts.push(root.formatTime(m.duration))
                     if (m.played) parts.push("Played")
                     return parts.join("  ·  ")
                   }
@@ -812,6 +1103,17 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.icon
               }
+            }
+
+            Rectangle {
+              visible: !del.isHeader && del.modelData.resume > 0 && del.modelData.duration > 0
+              anchors.left: parent.left
+              anchors.bottom: parent.bottom
+              anchors.leftMargin: Style.space(6)
+              height: Style.space(2)
+              radius: height / 2
+              color: Color.accent
+              width: visible ? Math.max(0, Math.min(1, del.modelData.resume / del.modelData.duration)) * (parent.width - Style.space(12)) : 0
             }
 
             MouseArea {
@@ -983,6 +1285,192 @@ Panel {
             }
           }
         }
+      }
+
+      // ---- chapters -------------------------------------------------------
+      PanelSectionHeader {
+        visible: root.configured && !root.settingsView && root.chaptersView
+        text: "CHAPTERS  ·  " + root.chapters.length
+        foreground: root.fg
+        fontFamily: root.fontFamily
+      }
+      ListView {
+        id: chapterList
+        visible: root.configured && !root.settingsView && root.chaptersView
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        clip: true
+        spacing: Style.spacing.xxs
+        boundsBehavior: Flickable.StopAtBounds
+        model: root.chapters
+        // Start with the current chapter in view.
+        onVisibleChanged: if (visible && root.chapterIndex >= 0) positionViewAtIndex(Math.max(0, root.chapterIndex - 2), ListView.Beginning)
+        delegate: Rectangle {
+          id: cd
+          required property var modelData
+          required property int index
+          width: chapterList.width
+          height: Style.space(44)
+          radius: Style.cornerRadius
+          readonly property bool isCurrent: index === root.chapterIndex
+          color: cMouse.containsMouse ? Style.hoverFillFor(root.fg, Color.accent)
+            : (isCurrent ? Style.selectedFillFor(root.fg, Color.accent) : "transparent")
+          Rectangle {
+            visible: cd.isCurrent
+            width: Style.space(3)
+            height: parent.height - Style.space(12)
+            anchors.verticalCenter: parent.verticalCenter
+            radius: width / 2
+            color: Color.accent
+          }
+          MouseArea {
+            id: cMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.seekTo(cd.modelData.start)
+          }
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Style.space(12)
+            anchors.rightMargin: Style.space(10)
+            spacing: Style.spacing.lg
+            Text {
+              textFormat: Text.PlainText
+              Layout.preferredWidth: Style.space(30)
+              text: cd.modelData.position
+              color: root.mutedFg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignRight
+            }
+            Text {
+              textFormat: Text.PlainText
+              Layout.fillWidth: true
+              text: cd.modelData.name
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: cd.isCurrent
+              elide: Text.ElideRight
+            }
+            Text {
+              textFormat: Text.PlainText
+              text: root.formatTime(cd.modelData.start)
+              color: root.mutedFg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+      }
+
+      // ---- bookmarks ------------------------------------------------------
+      RowLayout {
+        visible: root.configured && !root.settingsView && root.bookmarksView && root.absConfigured
+        Layout.fillWidth: true
+        spacing: Style.spacing.md
+        TextField {
+          id: bookmarkTitle
+          Layout.fillWidth: true
+          placeholderText: "Bookmark name (optional)"
+          foreground: root.fg
+          font.family: root.fontFamily
+          onAccepted: root.addBookmark()
+        }
+        Button {
+          text: "Add at " + root.formatTime(root.position)
+          iconText: "󰐕"
+          bordered: true
+          foreground: root.fg
+          fontFamily: root.fontFamily
+          onClicked: root.addBookmark()
+        }
+      }
+      Text {
+        textFormat: Text.PlainText
+        visible: root.configured && !root.settingsView && root.bookmarksView
+          && (!root.absConfigured || root.bookmarkError !== "" || root.bookmarks.length === 0)
+        Layout.fillWidth: true
+        wrapMode: Text.WordWrap
+        text: !root.absConfigured ? "Connect Audiobookshelf in Settings (gear icon) to use your bookmarks."
+          : (root.bookmarkError !== "" ? root.bookmarkError : "No bookmarks for this book yet.")
+        color: root.bookmarkError !== "" ? Color.accent : root.mutedFg
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+      ListView {
+        id: bookmarkList
+        visible: root.configured && !root.settingsView && root.bookmarksView && root.absConfigured
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        clip: true
+        spacing: Style.spacing.xs
+        boundsBehavior: Flickable.StopAtBounds
+        model: root.bookmarks
+        delegate: Rectangle {
+          id: bd
+          required property var modelData
+          width: bookmarkList.width
+          height: Style.space(52)
+          radius: Style.cornerRadius
+          color: bMouse.containsMouse || bDel.hot ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
+          MouseArea {
+            id: bMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.goBookmark(bd.modelData)
+          }
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Style.space(12)
+            anchors.rightMargin: Style.space(6)
+            spacing: Style.spacing.lg
+            Text {
+              textFormat: Text.PlainText
+              text: "󰃀"
+              color: Color.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.icon
+            }
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: Style.spacing.xxs
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                text: bd.modelData.title
+                color: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                elide: Text.ElideRight
+              }
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                text: root.formatTime(bd.modelData.time)
+                color: root.mutedFg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+            PanelActionButton {
+              id: bDel
+              iconText: "󰆴"
+              tooltipText: "Delete this bookmark"
+              foreground: root.fg
+              onClicked: root.deleteBookmark(bd.modelData)
+            }
+          }
+        }
+      }
+
+      // Without a visible list to fill the leftover height, a ColumnLayout
+      // spreads the sections apart; this keeps them pinned to the top.
+      Item {
+        Layout.fillHeight: true
+        visible: !list.visible && !queueList.visible && !chapterList.visible && !bookmarkList.visible
       }
     }
 

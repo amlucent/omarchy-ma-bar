@@ -22,9 +22,17 @@ project or the Omarchy project.*
   queue.
 - **Right-click** any album, playlist, track, audiobook or episode for
   **Play now**, **Play next** and **Add to queue**.
+- **Audiobooks:** a chapter line with previous / next chapter (previous restarts
+  the chapter first, like a CD player), a **Chapters** list to jump anywhere, and
+  **Bookmarks**: see the bookmarks you already made in Audiobookshelf, add one at
+  the current position (with an optional name), jump to one, or delete it.
+  Bookmarks read and write your Audiobookshelf account directly, so they stay in
+  step with the Audiobookshelf apps. Music Assistant itself has no bookmark
+  feature.
+- **Resume:** the Continue list shows time left and a progress bar.
 - A connect form in the dropdown (gear icon) if you prefer it to the command line.
 - Keyboard: `Space` play / pause, `/` search, `Esc` back or close.
-- IPC for keybindings: `omarchy-shell music-assistant toggle | playPause | next | previous | queue | library`.
+- IPC for keybindings: `omarchy-shell music-assistant toggle | playPause | next | previous | queue | chapters | bookmarks | library`.
 
 ## Requirements
 
@@ -47,6 +55,20 @@ Then add **Music Assistant** to the bar in the shell's bar settings if it does
 not appear.
 
 ## Connect
+
+### Audiobookshelf (optional, for bookmarks)
+
+Create an API token in Audiobookshelf (Settings, then Users, then your user) and
+enter it under the gear icon in the dropdown, or:
+
+```
+read -rs ABS_TOKEN; printf '%s\n' "$ABS_TOKEN" | python3 scripts/ma_backend.py abs-setup https://YOUR-AUDIOBOOKSHELF; unset ABS_TOKEN
+```
+
+The token is stored in the system keyring, separate from the Music Assistant
+token. Bookmarks only work for audiobooks that come from Audiobookshelf.
+
+### Music Assistant
 
 The token is read from your terminal without echo and sent to the keyring on
 stdin; it is never placed on a command line or in a file.
