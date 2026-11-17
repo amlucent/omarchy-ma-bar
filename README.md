@@ -1,32 +1,37 @@
-# Music Assistant for Omarchy
+<h1 align="center">Music Assistant for Omarchy</h1>
 
-Control your [Music Assistant](https://www.music-assistant.io/) server from the
-[Omarchy](https://omarchy.org/) bar: a bar icon with a full dropdown for music,
-audiobooks and podcasts, including queue management, speaker groups, chapters, a
-sleep timer and more.
+<p align="center">
+  <b>Your whole Music Assistant library, in the Omarchy bar.</b><br>
+  Music, audiobooks and podcasts, with a play queue, multi-room speaker groups,
+  chapters, bookmarks and a sleep timer.
+</p>
 
-*An independent client. Not affiliated with or endorsed by the Music Assistant
-project or the Omarchy project.*
+<p align="center">
+  <a href="https://github.com/amlucent/omarchy-music-assistant/releases"><img alt="Release" src="https://img.shields.io/github/v/release/amlucent/omarchy-music-assistant?include_prereleases&color=6b9bff"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-brightgreen"></a>
+  <img alt="Omarchy plugin" src="https://img.shields.io/badge/Omarchy-bar%20plugin-1f2937">
+  <img alt="Music Assistant" src="https://img.shields.io/badge/Music%20Assistant-2.10-18bcf2">
+  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-orange">
+</p>
 
-## Screenshots
+<p align="center">
+  <img src="docs/demo.gif" alt="Demo of the Music Assistant dropdown: home, podcasts, speaker groups, queue, audiobook chapters, bookmarks and the sleep timer" width="420">
+</p>
 
-| Now playing and Home | Podcasts: unfinished and newest first |
+<p align="center"><sub>Demo uses made-up data. Not affiliated with or endorsed by the Music Assistant or Omarchy projects.</sub></p>
+
+## Why you'll like it
+
+| | |
 | --- | --- |
-| ![Now playing and Home](docs/screenshots/now-playing.png) | ![Podcasts tab](docs/screenshots/podcasts.png) |
+| 🎧 **One bar icon, everything inside** | Left click opens the dropdown, middle click plays / pauses, right click skips. |
+| 🔊 **Real multi-room groups** | Tick speakers to play together, balance each one's volume, save the set as a *real* Music Assistant group. |
+| 🎙️ **Podcasts done right** | Your unfinished episodes first, then the newest across every show. |
+| 📚 **Audiobook friendly** | Chapters, resume progress, mark as played, and your Audiobookshelf bookmarks. |
+| 🌙 **Sleep timer** | 15 to 90 minutes, custom, or end of chapter. It pauses, so you keep your place. |
+| 🔒 **Private by design** | Tokens live in your system keyring, never in a file or on a command line. |
 
-| Speakers and groups | Play queue |
-| --- | --- |
-| ![Speakers and groups](docs/screenshots/speakers.png) | ![Play queue](docs/screenshots/queue.png) |
-
-| Audiobook with chapters | Chapters list |
-| --- | --- |
-| ![Audiobook controls](docs/screenshots/audiobook.png) | ![Chapters list](docs/screenshots/chapters.png) |
-
-| Bookmarks (Audiobookshelf) | Sleep timer |
-| --- | --- |
-| ![Bookmarks](docs/screenshots/bookmarks.png) | ![Sleep timer](docs/screenshots/sleep-timer.png) |
-
-*Screenshots use made-up demo data (see `tools/demo_server.py`).*
+**Jump to:** [Screenshots](#screenshots) · [Quick start](#quick-start) · [Features](#features) · [Audiobookshelf](#audiobookshelf-optional) · [Keybindings](#keybindings) · [Troubleshooting](#troubleshooting)
 
 ## Status
 
@@ -36,6 +41,28 @@ Audiobookshelf library. Other player types (Chromecast, DLNA, the Companion app'
 player) should work because everything goes through Music Assistant, but are less tested.
 Please [open an issue](../../issues/new/choose) if something misbehaves, and include your
 plugin and Music Assistant versions.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/now-playing.png" width="300"><br><sub><b>Now playing and Home</b></sub></td>
+    <td align="center"><img src="docs/screenshots/podcasts.png" width="300"><br><sub><b>Podcasts: unfinished and newest</b></sub></td>
+    <td align="center"><img src="docs/screenshots/speakers.png" width="300"><br><sub><b>Speakers and groups</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/queue.png" width="300"><br><sub><b>Play queue</b></sub></td>
+    <td align="center"><img src="docs/screenshots/audiobook.png" width="300"><br><sub><b>Audiobook controls</b></sub></td>
+    <td align="center"><img src="docs/screenshots/chapters.png" width="300"><br><sub><b>Chapters</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/bookmarks.png" width="300"><br><sub><b>Bookmarks (Audiobookshelf)</b></sub></td>
+    <td align="center"><img src="docs/screenshots/sleep-timer.png" width="300"><br><sub><b>Sleep timer</b></sub></td>
+    <td></td>
+  </tr>
+</table>
+
+<sub>Screenshots use made-up demo data (see <code>tools/demo_server.py</code>).</sub>
 
 ## Quick start
 
