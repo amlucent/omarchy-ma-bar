@@ -35,12 +35,14 @@ project or the Omarchy project.*
 - **Speakers and groups**: the speaker button lists every player that can join the one
   you're controlling. Tick a speaker to play on it together with the leader, untick to
   remove it, and use each row's slider for per-speaker volume. "Save these speakers as a
-  group…" creates a real Music Assistant group player (Sync Group provider), so it also
+  group…" creates a real Music Assistant group player, so it also
   appears in Music Assistant's own apps and in the player picker here. Saved groups are
   listed as buttons: click one to control it, click the cross twice to delete it (only
   group players can be deleted from here, never a real speaker). Members of a saved group
   can be ticked on and off like any other group. Groups made in the Sonos app are picked
-  up too. "Ungroup" dissolves an ad-hoc group.
+  up too. "Ungroup" dissolves an ad-hoc group. When the ticked speakers are different
+  brands (and Music Assistant's Universal Group Player provider is enabled) the plugin offers
+  a "Mixed brands" group type; those groups play the same audio but are not sample-synced.
 - **Sleep timer**: the moon button opens 15 / 30 / 45 / 60 / 90 minute presets, a custom
   minutes box and (for audiobooks) "End of chapter". The bar shows the time left and the
   timer keeps running with the dropdown closed. When it ends playback is paused, not

@@ -412,7 +412,12 @@ def speakers(base_url, token, player_id, call=api_call):
             "leader": pid == lid,
         })
     rows.sort(key=lambda r: (not r["leader"], not r["member"], r["name"].lower()))
-    return {"leader": lid, "leaderName": leader.get("display_name") or leader.get("name", ""),
+    try:
+        mixed_ok = any(p.get("domain") == "universal_group" and p.get("available")
+                       for p in call(base_url, token, "providers") if isinstance(p, dict))
+    except MaError:
+        mixed_ok = False
+    return {"mixedGroups": mixed_ok, "leader": lid, "leaderName": leader.get("display_name") or leader.get("name", ""),
             "canGroup": _can_group(leader), "isGroup": _is_group(leader), "speakers": rows}
 
 
@@ -452,10 +457,10 @@ def set_player_mute(base_url, token, player_id, muted, call=api_call):
 # Saved groups are real Music Assistant group players (the Sync Group provider),
 # so they show up in every Music Assistant client, not only in this plugin.
 
-GROUP_PROVIDER = "sync_group"
+GROUP_PROVIDERS = ("sync_group", "universal_group")   # in sync / mixed brands (not in sync)
 
 
-def save_group(base_url, token, selected_id, name, members, call=api_call):
+def save_group(base_url, token, selected_id, name, members, provider="sync_group", call=api_call):
     """Create a permanent group player from `members`. Members are the speakers
     currently ticked; any ad-hoc group they form is dissolved first so the two
     don't fight over the same speakers."""
@@ -465,11 +470,13 @@ def save_group(base_url, token, selected_id, name, members, call=api_call):
         raise MaError("give the group a name")
     if len(members) < 2:
         raise MaError("a group needs at least two speakers")
+    if provider not in GROUP_PROVIDERS:
+        raise MaError("unknown group type")
     lid, leader = leader_of(base_url, token, selected_id, call=call) if selected_id else ("", None)
     if lid in members and (leader or {}).get("type") != "group":
         ungroup(base_url, token, selected_id, call=call)
     made = call(base_url, token, "players/create_group_player",
-                {"provider": GROUP_PROVIDER, "name": name, "members": members, "dynamic": True})
+                {"provider": provider, "name": name, "members": members, "dynamic": True})
     return {"ok": True, "id": (made or {}).get("player_id", "")}
 
 
@@ -898,8 +905,10 @@ def main(argv):
         if cmd == "player-mute":
             _emit(set_player_mute(base, token, rest[0], rest[1] in ("1", "true", "yes")))
         if cmd == "group-save":
-            # group-save <name> <player id>...  (also switches the panel to the new group)
-            made = save_group(base, token, queue_id, rest[0] if rest else "", rest[1:])
+            # group-save <sync_group|universal_group> <name> <player id>...
+            # (also switches the panel to the new group)
+            made = save_group(base, token, queue_id, rest[1] if len(rest) > 1 else "", rest[2:],
+                              provider=rest[0] if rest else "")
             config = load_config()
             config["playerId"] = made["id"]
             config.pop("groupPresets", None)

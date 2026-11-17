@@ -554,7 +554,8 @@ class GroupingTests(unittest.TestCase):
         self.desk = raw_player("d", "Desk", provider="airplay", synced_to="o")
         self.kitchen = raw_player("k", "Kitchen")
         self.off = raw_player("x", "Offline", available=False)
-        self.table = {"players/all": [self.desk, self.kitchen, self.off, self.office,
+        self.table = {"providers": [{"domain": "universal_group", "available": True}],
+                      "players/all": [self.desk, self.kitchen, self.off, self.office,
                                        raw_player("g", "Group", type="group")]}
 
     def test_leader_of_child_is_its_parent(self):
@@ -616,6 +617,14 @@ class SavedGroupTests(unittest.TestCase):
         self.assertLess(cmds.index("players/cmd/set_members"), cmds.index("players/create_group_player"))
         self.assertEqual(call.calls[-1][1], {"provider": "sync_group", "name": "Work",
                                               "members": ["o", "d"], "dynamic": True})
+
+    def test_mixed_brand_groups_use_the_universal_provider(self):
+        call = make_call({"players/get": raw_player("o", "Office"),
+                          "players/create_group_player": {"player_id": "g"}})
+        ma.save_group("h", "t", "o", "Mix", ["a", "b"], provider="universal_group", call=call)
+        self.assertEqual(call.calls[-1][1]["provider"], "universal_group")
+        with self.assertRaises(ma.MaError):
+            ma.save_group("h", "t", "o", "Bad", ["a", "b"], provider="evil", call=call)
 
     def test_save_validates(self):
         call = make_call({})

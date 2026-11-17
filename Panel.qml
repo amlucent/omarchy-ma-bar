@@ -80,6 +80,19 @@ Panel {
   property bool speakersCanGroup: true
   property string speakersError: ""
   property bool speakersIsGroup: false
+  property bool mixedGroupsAvailable: false
+  property string groupKindChoice: ""
+  readonly property bool membersMixed: {
+    var seen = {}, n = 0
+    for (var i = 0; i < speakers.length; i++) {
+      if (!speakers[i].member) continue
+      var k = String(speakers[i].provider).split("--")[0]
+      if (!seen[k]) { seen[k] = true; n++ }
+    }
+    return n > 1
+  }
+  readonly property string groupKind: groupKindChoice !== "" ? groupKindChoice
+    : (membersMixed && mixedGroupsAvailable ? "universal_group" : "sync_group")
   property string confirmDeleteId: ""
   readonly property var groupPlayers: root.playerEntries.filter(function(p) { return p.isGroup })
   property var playerEntries: []
@@ -216,8 +229,9 @@ Panel {
     if (name === "") { root.speakersError = "Give the group a name first."; return }
     var ids = root.speakers.filter(function(r) { return r.member }).map(function(r) { return r.id })
     root.speakersError = ""
-    root.groupCmd(["group-save", name].concat(ids))
+    root.groupCmd(["group-save", root.groupKind, name].concat(ids))
     groupName.text = ""
+    root.groupKindChoice = ""
   }
   function pickPlayer(id) {
     setPlayerProc.command = root.backend(["set-player", id])
@@ -499,6 +513,7 @@ Panel {
           root.speakersLeaderName = r.leaderName || ""
           root.speakersCanGroup = r.canGroup !== false
           root.speakersIsGroup = r.isGroup === true
+          root.mixedGroupsAvailable = r.mixedGroups === true
         } catch (e) {}
       }
     }
@@ -1801,6 +1816,31 @@ Panel {
           fontFamily: root.fontFamily
           onClicked: root.ungroupAll()
         }
+      }
+      RowLayout {
+        visible: root.configured && !root.settingsView && root.speakersView && root.memberCount > 1
+          && !root.speakersIsGroup && root.mixedGroupsAvailable
+        Layout.fillWidth: true
+        spacing: Style.spacing.md
+        Text {
+          textFormat: Text.PlainText
+          text: "Group type:"
+          color: root.mutedFg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        ButtonGroup {
+          options: [
+            { value: "sync_group", label: "In sync", tooltip: "Same-brand speakers, kept in sync" },
+            { value: "universal_group", label: "Mixed brands", tooltip: "Different brands play the same audio, but not in sync" }
+          ]
+          value: root.groupKind
+          foreground: root.fg
+          fontFamily: root.fontFamily
+          focusable: false
+          onChanged: function(v) { root.groupKindChoice = v }
+        }
+        Item { Layout.fillWidth: true }
       }
       ListView {
         id: speakerList
