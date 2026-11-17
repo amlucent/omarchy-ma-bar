@@ -104,25 +104,48 @@ class HttpTests(unittest.TestCase):
 AUDIOBOOK = {
     "media_type": "audiobook", "uri": "library://audiobook/1", "name": "Example Book",
     "duration": 3600, "authors": [{"name": "A. Writer"}, {"name": "B. Author"}],
-    "image": {"type": "thumb", "path": "https://abs.example/cover?token=SECRET", "provider": "abs"},
+    "image": {"type": "thumb", "path": "https://abs.example/cover?token=SECRET", "provider": "abs",
+              "proxy_id": "abc123"},
 }
 TRACK = {
     "media_type": "track", "uri": "library://track/2", "name": "Example Song", "duration": 200,
-    "artists": [{"name": "The Band"}], "metadata": {"images": [{"path": "p.jpg", "provider": "fs"}]},
+    "artists": [{"name": "The Band"}], "metadata": {"images": [{"path": "p.jpg", "provider": "fs", "proxy_id": "def456"}]},
 }
 
 
 class SimplifyTests(unittest.TestCase):
     def test_audiobook(self):
-        item = ma.simplify(AUDIOBOOK)
+        item = ma.simplify(AUDIOBOOK, "http://h:8095")
         self.assertEqual(item["subtitle"], "A. Writer, B. Author")
         self.assertEqual(item["type"], "audiobook")
-        self.assertEqual(item["image"]["provider"], "abs")
+        self.assertEqual(item["cover"], "http://h:8095/imageproxy/abc123?size=256&fmt=jpg")
+
+    def test_raw_artwork_address_never_leaks(self):
+        # Some providers embed an access token in the artwork address.
+        out = json.dumps([ma.simplify(AUDIOBOOK, "http://h:8095"),
+                          ma.simplify_queue({"current_item": {"name": "x", "media_item": AUDIOBOOK}},
+                                            "http://h:8095")])
+        self.assertNotIn("SECRET", out)
+        self.assertNotIn("abs.example", out)
+
+    def test_resume_and_played(self):
+        item = ma.simplify(dict(AUDIOBOOK, resume_position_ms=90000, fully_played=True))
+        self.assertEqual(item["resume"], 90.0)
+        self.assertTrue(item["played"])
+        self.assertIsNone(ma.simplify(AUDIOBOOK)["resume"])
 
     def test_track_falls_back_to_metadata_image(self):
-        item = ma.simplify(TRACK)
+        item = ma.simplify(TRACK, "http://h")
         self.assertEqual(item["subtitle"], "The Band")
-        self.assertEqual(item["image"], {"path": "p.jpg", "provider": "fs"})
+        self.assertEqual(item["cover"], "http://h/imageproxy/def456?size=256&fmt=jpg")
+
+    def test_no_cover_when_no_proxy_id(self):
+        self.assertEqual(ma.simplify({"media_type": "track", "image": {"path": "x"}}, "http://h")["cover"], "")
+
+    def test_cover_size_is_restricted_to_what_the_server_allows(self):
+        ref = {"proxy_id": "z"}
+        self.assertIn("size=256", ma.cover_url("http://h", ref, 128))
+        self.assertIn("size=512", ma.cover_url("http://h", ref, 512))
 
     def test_junk_is_dropped(self):
         self.assertIsNone(ma.simplify("nope"))
@@ -139,6 +162,43 @@ class SimplifyTests(unittest.TestCase):
         self.assertEqual(q["state"], "playing")
         self.assertEqual(q["item"]["subtitle"], "The Band")
         self.assertEqual(q["speed"], 1.25)
+
+
+class EpisodeAndHomeTests(unittest.TestCase):
+    def test_split_uri(self):
+        self.assertEqual(ma.split_uri("library://podcast/12"), ("library", "12"))
+        self.assertEqual(ma.split_uri("garbage"), ("", ""))
+        self.assertEqual(ma.split_uri(""), ("", ""))
+
+    def test_episodes_calls_with_provider_and_id(self):
+        call = make_call({"music/podcasts/podcast_episodes": [
+            {"media_type": "podcast_episode", "uri": "u1", "name": "Ep 1", "duration": 60,
+             "podcast": {"name": "Show"}, "fully_played": False}]})
+        out = ma.episodes("http://h", "t", "library://podcast/12", call=call)
+        self.assertEqual(out[0]["subtitle"], "Show")
+        self.assertEqual(call.calls[0][1], {"item_id": "12", "provider_instance_id_or_domain": "library"})
+
+    def test_episodes_rejects_bad_uri(self):
+        with self.assertRaises(ma.MaError):
+            ma.episodes("http://h", "t", "nope", call=make_call({}))
+
+    def test_home_has_both_sections(self):
+        call = make_call({"music/in_progress_items": [AUDIOBOOK], "music/recently_played_items": [TRACK]})
+        out = ma.home("http://h", "t", call=call)
+        self.assertEqual(out["continue"][0]["name"], "Example Book")
+        self.assertEqual(out["recent"][0]["name"], "Example Song")
+
+    def test_now_full_adds_volume(self):
+        call = make_call({
+            "player_queues/get": {"queue_id": "q", "state": "playing", "current_item": None},
+            "players/get": {"volume_level": 30, "volume_muted": False, "display_name": "Desk"}})
+        out = ma.now_playing("http://h", "t", "q", full=True, call=call)
+        self.assertEqual((out["volume"], out["muted"], out["player"]), (30, False, "Desk"))
+
+    def test_now_basic_skips_player_call(self):
+        call = make_call({"player_queues/get": {"queue_id": "q", "state": "idle", "current_item": None}})
+        ma.now_playing("http://h", "t", "q", call=call)
+        self.assertEqual([c[0] for c in call.calls], ["player_queues/get"])
 
 
 class QueryTests(unittest.TestCase):

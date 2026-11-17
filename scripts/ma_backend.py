@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 KEYRING_SERVICE = "omarchy-music-assistant"
@@ -189,21 +189,37 @@ def _names(items):
     return ", ".join(i.get("name", "") for i in (items or []) if isinstance(i, dict) and i.get("name"))
 
 
+COVER_SIZES = (80, 160, 256, 512, 1024)
+
+
 def image_ref(item):
-    """Return {path, provider} for an item's artwork, or None. The raw path may
-    be a URL that embeds another service's token, so it is passed along only to
-    the image fetcher and never logged."""
+    """Return the artwork's proxy id (and provider) for an item, or None.
+
+    Raw artwork paths can be URLs that embed another service's token, so only
+    the server's opaque proxy id is passed on; the UI fetches the picture from
+    the Music Assistant server and never sees the original address."""
+    candidates = []
     img = (item or {}).get("image")
-    if isinstance(img, dict) and img.get("path"):
-        return {"path": img["path"], "provider": img.get("provider", "")}
-    meta = (item or {}).get("metadata") or {}
-    for cand in meta.get("images") or []:
-        if isinstance(cand, dict) and cand.get("path"):
-            return {"path": cand["path"], "provider": cand.get("provider", "")}
+    if isinstance(img, dict):
+        candidates.append(img)
+    candidates.extend(c for c in ((item or {}).get("metadata") or {}).get("images") or []
+                      if isinstance(c, dict))
+    for cand in candidates:
+        if cand.get("proxy_id"):
+            return {"proxy_id": cand["proxy_id"], "provider": cand.get("provider", "")}
     return None
 
 
-def simplify(item):
+def cover_url(base_url, ref, size=256):
+    """Address of a cover on the server's image proxy (no auth needed)."""
+    if not ref or not ref.get("proxy_id") or not base_url:
+        return ""
+    if size not in COVER_SIZES:
+        size = 256
+    return "%s/imageproxy/%s?size=%d&fmt=jpg" % (base_url, quote(ref["proxy_id"], safe=""), size)
+
+
+def simplify(item, base_url=""):
     """Reduce an MA media item to the few fields the UI needs."""
     if not isinstance(item, dict):
         return None
@@ -216,13 +232,16 @@ def simplify(item):
         subtitle = item.get("publisher", "") or ""
     else:
         subtitle = ""
+    resume_ms = item.get("resume_position_ms")
     return {
         "uri": item.get("uri", ""),
         "name": item.get("name", ""),
         "type": mtype,
         "subtitle": subtitle,
         "duration": item.get("duration"),
-        "image": image_ref(item),
+        "cover": cover_url(base_url, image_ref(item)),
+        "played": bool(item.get("fully_played")),
+        "resume": (resume_ms / 1000.0) if isinstance(resume_ms, (int, float)) else None,
     }
 
 
@@ -238,7 +257,7 @@ def simplify_player(player):
     }
 
 
-def simplify_queue(queue):
+def simplify_queue(queue, base_url=""):
     if not isinstance(queue, dict):
         return {"state": "idle", "item": None}
     current = queue.get("current_item") or {}
@@ -256,7 +275,7 @@ def simplify_queue(queue):
             "type": media.get("media_type", ""),
             "subtitle": (_names(media.get("artists")) or _names(media.get("authors"))
                          or (media.get("podcast") or {}).get("name", "")),
-            "image": image_ref(current) or image_ref(media),
+            "cover": cover_url(base_url, image_ref(current) or image_ref(media)),
         } if current else None,
     }
 
@@ -268,8 +287,16 @@ def list_players(base_url, token, call=api_call):
     return [simplify_player(p) for p in players if isinstance(p, dict)]
 
 
-def now_playing(base_url, token, queue_id, call=api_call):
-    return simplify_queue(call(base_url, token, "player_queues/get", {"queue_id": queue_id}))
+def now_playing(base_url, token, queue_id, full=False, call=api_call):
+    out = simplify_queue(call(base_url, token, "player_queues/get", {"queue_id": queue_id}), base_url)
+    if full:
+        # Volume lives on the player, not the queue.
+        player = call(base_url, token, "players/get", {"player_id": queue_id})
+        if isinstance(player, dict):
+            out["volume"] = player.get("volume_level")
+            out["muted"] = player.get("volume_muted")
+            out["player"] = player.get("display_name") or player.get("name", "")
+    return out
 
 
 def search(base_url, token, query, limit=8, call=api_call):
@@ -277,7 +304,7 @@ def search(base_url, token, query, limit=8, call=api_call):
     out = {}
     if isinstance(result, dict):
         for kind in ("tracks", "albums", "artists", "playlists", "audiobooks", "podcasts"):
-            items = [simplify(i) for i in result.get(kind) or []]
+            items = [simplify(i, base_url) for i in result.get(kind) or []]
             if items:
                 out[kind] = [i for i in items if i]
     return out
@@ -290,7 +317,7 @@ def library(base_url, token, kind, limit=50, offset=0, query="", call=api_call):
     args = {"limit": limit, "offset": offset, "order_by": "sort_name"}
     if query:
         args["search"] = query
-    return [i for i in (simplify(x) for x in call(base_url, token, command, args)) if i]
+    return [i for i in (simplify(x, base_url) for x in call(base_url, token, command, args)) if i]
 
 
 def resolve_queue(base_url, token, configured="", call=api_call):
@@ -308,12 +335,36 @@ def resolve_queue(base_url, token, configured="", call=api_call):
 
 def in_progress(base_url, token, limit=20, call=api_call):
     items = call(base_url, token, "music/in_progress_items", {"limit": limit})
-    return [i for i in (simplify(x) for x in items or []) if i]
+    return [i for i in (simplify(x, base_url) for x in items or []) if i]
 
 
 def recently_played(base_url, token, limit=20, call=api_call):
     items = call(base_url, token, "music/recently_played_items", {"limit": limit})
-    return [i for i in (simplify(x) for x in items or []) if i]
+    return [i for i in (simplify(x, base_url) for x in items or []) if i]
+
+
+def home(base_url, token, limit=12, call=api_call):
+    """What the dropdown's Home tab shows: things to continue, then recents."""
+    return {"continue": in_progress(base_url, token, limit, call=call),
+            "recent": recently_played(base_url, token, limit, call=call)}
+
+
+def split_uri(uri):
+    """'library://podcast/12' -> ('library', '12'); anything else -> ('', '')."""
+    parts = urlsplit(uri or "")
+    item_id = parts.path.lstrip("/")
+    if parts.scheme and parts.netloc and item_id:
+        return parts.scheme, item_id
+    return "", ""
+
+
+def episodes(base_url, token, uri, call=api_call):
+    provider, item_id = split_uri(uri)
+    if not provider:
+        raise MaError("that is not a podcast address")
+    items = call(base_url, token, "music/podcasts/podcast_episodes",
+                 {"item_id": item_id, "provider_instance_id_or_domain": provider})
+    return [i for i in (simplify(x, base_url) for x in items or []) if i]
 
 
 # -------------------------------------------------------------------- control
@@ -403,6 +454,8 @@ def main(argv):
             save_config(config)
             _emit({"ok": True})
 
+        full = "--full" in rest
+        rest = [a for a in rest if a != "--full"]
         base, token = _need_setup()
         configured = os.environ.get("MA_PLUGIN_QUEUE") or load_config().get("playerId", "")
         queue_id = configured
@@ -414,7 +467,7 @@ def main(argv):
         if cmd == "players":
             _emit(list_players(base, token))
         if cmd == "now":
-            _emit(now_playing(base, token, rest[0] if rest else queue_id))
+            _emit(now_playing(base, token, rest[0] if rest else queue_id, full=full))
         if cmd == "search":
             _emit(search(base, token, " ".join(rest)))
         if cmd == "library":
@@ -422,6 +475,10 @@ def main(argv):
             limit = int(rest[1]) if len(rest) > 1 else 50
             offset = int(rest[2]) if len(rest) > 2 else 0
             _emit(library(base, token, kind, limit, offset, " ".join(rest[3:])))
+        if cmd == "home":
+            _emit(home(base, token))
+        if cmd == "episodes":
+            _emit(episodes(base, token, rest[0] if rest else ""))
         if cmd == "in-progress":
             _emit(in_progress(base, token))
         if cmd == "recent":
