@@ -20,10 +20,40 @@ BarWidget {
   property string subtitle: ""
   readonly property bool playing: state === "playing"
 
+  // ---- sleep timer ------------------------------------------------------
+  // Lives here (not in the dropdown) so it keeps running while the panel is
+  // closed. When it runs out the player is paused, never stopped, so the
+  // queue and resume position are kept.
+  property double sleepEndsAt: 0          // epoch ms; 0 = off
+  property string sleepLabel: ""
+  property int sleepLeft: 0               // seconds
+  readonly property bool sleeping: sleepEndsAt > 0
+
+  function formatLeft(sec) {
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60
+    if (h > 0) return h + "h " + (m < 10 ? "0" : "") + m + "m"
+    if (m > 0) return m + "m"
+    return s + "s"
+  }
+  function startSleep(seconds, label) {
+    seconds = Math.round(seconds)
+    if (!(seconds > 0)) return
+    root.sleepLabel = label || ""
+    root.sleepEndsAt = Date.now() + seconds * 1000
+    root.sleepLeft = seconds
+  }
+  function cancelSleep() {
+    root.sleepEndsAt = 0
+    root.sleepLeft = 0
+    root.sleepLabel = ""
+  }
+
   readonly property string tooltipText: {
     if (!root.configured) return "Music Assistant: not connected (see README)"
     if (!root.reachable) return "Music Assistant: server unreachable"
     if (root.title === "") return "Music Assistant"
+    if (root.sleeping) return "Sleep timer: pausing in " + root.formatLeft(root.sleepLeft)
+      + (root.sleepLabel !== "" ? " (" + root.sleepLabel + ")" : "")
     var line = (root.playing ? "Playing: " : "Paused: ") + root.title
     return root.subtitle !== "" ? line + " — " + root.subtitle : line
   }
@@ -93,6 +123,9 @@ BarWidget {
     function queue(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("queue") }
     function chapters(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("chapters") }
     function bookmarks(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("bookmarks") }
+    function sleep(minutes: int): void { root.startSleep(minutes * 60, minutes + " min") }
+    function sleepMenu(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("sleep") }
+    function sleepCancel(): void { root.cancelSleep() }
     function library(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("") }
   }
 
@@ -102,6 +135,18 @@ BarWidget {
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refresh()
+  }
+
+  Timer {
+    interval: 1000
+    running: root.sleeping
+    repeat: true
+    onTriggered: {
+      var left = Math.ceil((root.sleepEndsAt - Date.now()) / 1000)
+      if (left > 0) { root.sleepLeft = left; return }
+      root.cancelSleep()
+      root.control("pause")
+    }
   }
 
   Timer {
@@ -144,6 +189,7 @@ BarWidget {
     text: root.playing ? "󰎈" : "󰎆"
     tooltipText: root.tooltipText
     active: root.playing
+    labelText: root.sleeping ? root.formatLeft(root.sleepLeft) : ""
     dimmed: !root.configured || !root.reachable
     onPressed: function(b) {
       if (b === Qt.MiddleButton) root.control("playpause")

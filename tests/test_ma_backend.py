@@ -470,6 +470,11 @@ class ControlTests(unittest.TestCase):
         ma.control("h", "t", "q1", "playpause", call=call)
         self.assertEqual(call.calls[0], ("player_queues/play_pause", {"queue_id": "q1"}))
 
+    def test_pause_is_idempotent_not_toggle(self):
+        call = make_call({"player_queues/pause": None})
+        ma.control("h", "t", "q1", "pause", call=call)
+        self.assertEqual(call.calls[0], ("player_queues/pause", {"queue_id": "q1"}))
+
     def test_seek_and_speed(self):
         call = make_call({"player_queues/seek": None, "player_queues/set_playback_speed": None})
         ma.control("h", "t", "q1", "seek", ["42.9"], call=call)

@@ -600,6 +600,7 @@ CONTROLS = {
     "playpause": ("player_queues/play_pause", lambda a: {}),
     "next": ("player_queues/next", lambda a: {}),
     "previous": ("player_queues/previous", lambda a: {}),
+    "pause": ("player_queues/pause", lambda a: {}),
     "stop": ("player_queues/stop", lambda a: {}),
     "seek": ("player_queues/seek", lambda a: {"position": int(float(a[0]))}),
     "speed": ("player_queues/set_playback_speed", lambda a: {"speed": float(a[0])}),

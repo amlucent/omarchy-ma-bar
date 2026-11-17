@@ -72,7 +72,10 @@ Panel {
   // ---- chapters, bookmarks, Audiobookshelf ---------------------------------
   property bool chaptersView: false
   property bool bookmarksView: false
-  readonly property bool listsHidden: queueView || chaptersView || bookmarksView
+  property bool sleepView: false
+  readonly property var sleepHost: hostWidget
+  readonly property bool sleeping: sleepHost ? sleepHost.sleeping === true : false
+  readonly property bool listsHidden: queueView || chaptersView || bookmarksView || sleepView
   property string itemUri: ""
   property string detailUri: ""
   property var chapters: []
@@ -134,11 +137,32 @@ Panel {
     root.queueView = name === "queue"
     root.chaptersView = name === "chapters"
     root.bookmarksView = name === "bookmarks"
+    root.sleepView = name === "sleep"
   }
   function toggleView(name) {
     var open = (name === "queue" && root.queueView) || (name === "chapters" && root.chaptersView)
-      || (name === "bookmarks" && root.bookmarksView)
+      || (name === "bookmarks" && root.bookmarksView) || (name === "sleep" && root.sleepView)
     root.showView(open ? "" : name)
+  }
+
+  function startSleep(minutes, label) {
+    if (!root.sleepHost || !(minutes > 0)) return
+    root.sleepHost.startSleep(minutes * 60, label || (Math.round(minutes) + " min"))
+    root.notice = "Sleep timer set: pausing in " + root.sleepHost.formatLeft(Math.round(minutes * 60))
+    root.showView("")
+  }
+  function sleepUntilChapterEnd() {
+    if (!root.sleepHost || root.chapterIndex < 0) return
+    var left = (root.chapterEnd(root.chapterIndex) - root.position) / Math.max(0.5, root.speed)
+    if (!(left > 1)) return
+    root.sleepHost.startSleep(left, "end of chapter")
+    root.notice = "Sleep timer set: pausing at the end of this chapter"
+    root.showView("")
+  }
+  function cancelSleep() {
+    if (root.sleepHost) root.sleepHost.cancelSleep()
+    root.notice = "Sleep timer cancelled"
+    root.showView("")
   }
 
   function seekTo(seconds) { root.position = seconds; root.ctl(["seek", String(Math.round(seconds))]) }
@@ -872,6 +896,12 @@ Panel {
             foreground: root.queueView ? Color.accent : root.fg
             onClicked: root.toggleView("queue")
           }
+          PanelActionButton {
+            iconText: root.sleeping ? "󰒲" : "󰤄"
+            tooltipText: root.sleeping ? "Sleep timer: " + root.sleepHost.formatLeft(root.sleepHost.sleepLeft) + " left" : "Sleep timer"
+            foreground: root.sleepView || root.sleeping ? Color.accent : root.fg
+            onClicked: root.toggleView("sleep")
+          }
         }
 
         // Audiobooks: chapter navigation and bookmarks.
@@ -1464,6 +1494,79 @@ Panel {
             }
           }
         }
+      }
+
+      // ---- sleep timer ----------------------------------------------------
+      PanelSectionHeader {
+        visible: root.configured && !root.settingsView && root.sleepView
+        text: root.sleeping ? "SLEEP TIMER  ·  " + root.sleepHost.formatLeft(root.sleepHost.sleepLeft) + " LEFT" : "SLEEP TIMER"
+        foreground: root.fg
+        fontFamily: root.fontFamily
+      }
+      Text {
+        textFormat: Text.PlainText
+        visible: root.configured && !root.settingsView && root.sleepView
+        Layout.fillWidth: true
+        wrapMode: Text.WordWrap
+        text: "Pause playback after:"
+        color: root.mutedFg
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+      Flow {
+        visible: root.configured && !root.settingsView && root.sleepView
+        Layout.fillWidth: true
+        spacing: Style.spacing.md
+        Repeater {
+          model: [15, 30, 45, 60, 90]
+          delegate: Button {
+            required property int modelData
+            text: modelData + " min"
+            bordered: true
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            onClicked: root.startSleep(modelData)
+          }
+        }
+        Button {
+          visible: root.chapterIndex >= 0
+          text: "End of chapter"
+          bordered: true
+          foreground: root.fg
+          fontFamily: root.fontFamily
+          onClicked: root.sleepUntilChapterEnd()
+        }
+      }
+      RowLayout {
+        visible: root.configured && !root.settingsView && root.sleepView
+        Layout.fillWidth: true
+        spacing: Style.spacing.md
+        TextField {
+          id: sleepMinutes
+          Layout.fillWidth: true
+          placeholderText: "Custom minutes"
+          foreground: root.fg
+          font.family: root.fontFamily
+          validator: IntValidator { bottom: 1; top: 720 }
+          onAccepted: { root.startSleep(parseInt(text)); text = "" }
+        }
+        Button {
+          text: "Start"
+          bordered: true
+          foreground: root.fg
+          fontFamily: root.fontFamily
+          enabled: sleepMinutes.text !== "" && parseInt(sleepMinutes.text) > 0
+          onClicked: { root.startSleep(parseInt(sleepMinutes.text)); sleepMinutes.text = "" }
+        }
+      }
+      Button {
+        visible: root.configured && !root.settingsView && root.sleepView && root.sleeping
+        text: "Cancel timer"
+        iconText: "󰅖"
+        bordered: true
+        foreground: root.fg
+        fontFamily: root.fontFamily
+        onClicked: root.cancelSleep()
       }
 
       // Without a visible list to fill the leftover height, a ColumnLayout

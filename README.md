@@ -32,7 +32,11 @@ project or the Omarchy project.*
 - **Resume:** the Continue list shows time left and a progress bar.
 - A connect form in the dropdown (gear icon) if you prefer it to the command line.
 - Keyboard: `Space` play / pause, `/` search, `Esc` back or close.
-- IPC for keybindings: `omarchy-shell music-assistant toggle | playPause | next | previous | queue | chapters | bookmarks | library`.
+- **Sleep timer**: the moon button opens 15 / 30 / 45 / 60 / 90 minute presets, a custom
+  minutes box and (for audiobooks) "End of chapter". The bar shows the time left and the
+  timer keeps running with the dropdown closed. When it ends playback is paused, not
+  stopped, so your queue and position are kept.
+- IPC for keybindings: `omarchy-shell music-assistant toggle | playPause | next | previous | queue | chapters | bookmarks | sleepMenu | library`, plus `sleep <minutes>` and `sleepCancel`.
 
 ## Requirements
 
