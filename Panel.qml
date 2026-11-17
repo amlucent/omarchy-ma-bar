@@ -61,6 +61,14 @@ Panel {
   property bool loading: false
   property string listError: ""
 
+  // ---- queue + context menu -----------------------------------------------
+  property bool queueView: false
+  property var queueRows: []
+  property string notice: ""
+  property var menuItem: null        // the row the context menu is open for
+  property real menuX: 0
+  property real menuY: 0
+
   readonly property var tabOptions: [
     { value: "home", label: "Home", tooltip: "Continue and recent" },
     { value: "albums", label: "Albums" },
@@ -90,10 +98,41 @@ Panel {
   function toggle() { root.opened ? root.close() : root.open() }
 
   function goBack() {
+    if (root.menuItem) { root.menuItem = null; return true }
     if (root.settingsView && root.configured) { root.settingsView = false; return true }
+    if (root.queueView) { root.queueView = false; return true }
     if (root.openPodcast) { root.openPodcast = null; root.loadList(); return true }
     if (root.query !== "") { searchField.text = ""; return true }
     return false
+  }
+
+  function showNotice(text) { root.notice = text; noticeTimer.restart() }
+
+  function loadQueue() {
+    if (!root.configured || queueProc.running) return
+    queueProc.command = root.backend(["queue"])
+    queueProc.running = true
+  }
+
+  // Run a queue edit, then re-read the queue shortly after the server applies it.
+  function queueAction(args, message) {
+    queueActProc.command = root.backend(args)
+    queueActProc.running = true
+    if (message) root.showNotice(message)
+    queueRefresh.restart()
+  }
+
+  function enqueue(item, mode) {
+    root.menuItem = null
+    var labels = { play: "Playing now", next: "Playing next", add: "Added to queue" }
+    root.queueAction(["enqueue", mode, item.uri], labels[mode] + ": " + item.name)
+    if (mode === "play") refreshSoon.restart()
+  }
+
+  function openMenu(item, x, y) {
+    root.menuItem = item
+    root.menuX = x
+    root.menuY = y
   }
 
   function refreshAll() {
@@ -160,6 +199,7 @@ Panel {
   }
 
   onTabChanged: { root.openPodcast = null; root.loadList() }
+  onQueueViewChanged: if (root.queueView) root.loadQueue()
   onQueryChanged: searchDebounce.restart()
 
   Timer { id: searchDebounce; interval: 350; onTriggered: { root.openPodcast = null; root.loadList() } }
@@ -169,8 +209,10 @@ Panel {
     interval: 2000
     running: root.opened && root.configured
     repeat: true
-    onTriggered: root.pollNow()
+    onTriggered: { root.pollNow(); if (root.queueView) root.loadQueue() }
   }
+  Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice = "" }
+  Timer { id: queueRefresh; interval: 700; onTriggered: { root.loadQueue(); root.pollNow() } }
   // Smooth the progress bar between server updates.
   Timer {
     interval: 1000
@@ -226,6 +268,18 @@ Panel {
   }
 
   Process { id: ctlProc }
+  Process { id: queueActProc }
+  Process {
+    id: queueProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var r = JSON.parse(text)
+          if (Array.isArray(r)) root.queueRows = r
+        } catch (e) {}
+      }
+    }
+  }
   Process { id: playProc }
   Process { id: setPlayerProc; onExited: root.refreshAll() }
 
@@ -386,6 +440,17 @@ Panel {
           foreground: root.fg
           onClicked: { root.settingsView = !root.settingsView; if (root.settingsView) urlField.text = root.serverUrl }
         }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        visible: root.notice !== ""
+        Layout.fillWidth: true
+        text: root.notice
+        color: Color.accent
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        elide: Text.ElideRight
       }
 
       // ---- connect / settings ---------------------------------------------
@@ -568,6 +633,12 @@ Panel {
           }
           PanelActionButton { iconText: "󰒭"; tooltipText: "Next"; foreground: root.fg; onClicked: root.ctl(["next"]) }
           Item { Layout.fillWidth: true }
+          PanelActionButton {
+            iconText: "󰲸"
+            tooltipText: root.queueView ? "Back to the library" : "Show the play queue"
+            foreground: root.queueView ? Color.accent : root.fg
+            onClicked: root.queueView = !root.queueView
+          }
         }
 
         RowLayout {
@@ -618,7 +689,7 @@ Panel {
 
       // ---- tabs + search --------------------------------------------------
       ButtonGroup {
-        visible: root.configured && !root.settingsView && root.openPodcast === null
+        visible: root.configured && !root.settingsView && !root.queueView && root.openPodcast === null
         Layout.fillWidth: true
         options: root.tabOptions
         value: root.tab
@@ -630,7 +701,7 @@ Panel {
 
       TextField {
         id: searchField
-        visible: root.configured && !root.settingsView && root.openPodcast === null
+        visible: root.configured && !root.settingsView && !root.queueView && root.openPodcast === null
         Layout.fillWidth: true
         placeholderText: "Search music, audiobooks and podcasts  ( / )"
         foreground: root.fg
@@ -640,7 +711,7 @@ Panel {
 
       Text {
         textFormat: Text.PlainText
-        visible: root.configured && !root.settingsView && (root.listError !== "" || (!root.loading && root.rows.length === 0))
+        visible: root.configured && !root.settingsView && !root.queueView && (root.listError !== "" || (!root.loading && root.rows.length === 0))
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
         text: root.listError !== "" ? root.listError : "Nothing here"
@@ -652,7 +723,7 @@ Panel {
       // ---- list -----------------------------------------------------------
       ListView {
         id: list
-        visible: root.configured && !root.settingsView
+        visible: root.configured && !root.settingsView && !root.queueView
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
@@ -748,9 +819,225 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: root.activate(del.modelData)
+              acceptedButtons: Qt.LeftButton | Qt.RightButton
+              onClicked: function(mouse) {
+                if (mouse.button === Qt.RightButton) {
+                  if (del.modelData.type === "podcast") return
+                  var p = rowMouse.mapToItem(keyCatcher, mouse.x, mouse.y)
+                  root.openMenu(del.modelData, p.x, p.y)
+                } else {
+                  root.activate(del.modelData)
+                }
+              }
             }
           }
+        }
+      }
+
+      // ---- queue ----------------------------------------------------------
+      RowLayout {
+        visible: root.configured && !root.settingsView && root.queueView
+        Layout.fillWidth: true
+        PanelSectionHeader {
+          text: "UP NEXT  ·  " + root.queueRows.length + (root.queueRows.length === 1 ? " ITEM" : " ITEMS")
+          foreground: root.fg
+          fontFamily: root.fontFamily
+        }
+        Item { Layout.fillWidth: true }
+        Button {
+          visible: root.queueRows.length > 0
+          text: "Clear"
+          iconText: "󰆴"
+          bordered: true
+          foreground: root.fg
+          fontFamily: root.fontFamily
+          onClicked: root.queueAction(["queue-clear"], "Queue cleared")
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        visible: root.configured && !root.settingsView && root.queueView && root.queueRows.length === 0
+        Layout.fillWidth: true
+        wrapMode: Text.WordWrap
+        text: "The queue is empty. Right-click anything in the library to play it next or add it to the queue."
+        color: root.mutedFg
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+
+      ListView {
+        id: queueList
+        visible: root.configured && !root.settingsView && root.queueView
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        clip: true
+        spacing: Style.spacing.xs
+        boundsBehavior: Flickable.StopAtBounds
+        model: root.queueRows
+        delegate: Rectangle {
+          id: qd
+          required property var modelData
+          required property int index
+          width: queueList.width
+          height: Style.space(60)
+          radius: Style.cornerRadius
+          color: qMouse.containsMouse || qUp.hot || qDown.hot || qDel.hot
+            ? Style.hoverFillFor(root.fg, Color.accent)
+            : (modelData.current ? Style.selectedFillFor(root.fg, Color.accent) : "transparent")
+
+          Rectangle {
+            visible: qd.modelData.current
+            width: Style.space(3)
+            height: parent.height - Style.space(12)
+            anchors.verticalCenter: parent.verticalCenter
+            radius: width / 2
+            color: Color.accent
+          }
+
+          MouseArea {
+            id: qMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.queueAction(["queue-jump", qd.modelData.id])
+          }
+
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Style.space(10)
+            anchors.rightMargin: Style.space(6)
+            anchors.topMargin: Style.space(6)
+            anchors.bottomMargin: Style.space(6)
+            spacing: Style.spacing.lg
+
+            Rectangle {
+              Layout.preferredWidth: Style.space(48)
+              Layout.preferredHeight: Style.space(48)
+              radius: Style.cornerRadius
+              color: Style.hoverFillFor(root.fg, Color.accent)
+              clip: true
+              Image {
+                anchors.fill: parent
+                visible: qd.modelData.cover !== ""
+                source: qd.modelData.cover
+                sourceSize.width: Style.space(48) * 2
+                sourceSize.height: Style.space(48) * 2
+                fillMode: Image.PreserveAspectCrop
+                asynchronous: true
+              }
+            }
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: Style.spacing.xxs
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                text: qd.modelData.name
+                color: qd.modelData.available ? root.fg : root.mutedFg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: qd.modelData.current
+                elide: Text.ElideRight
+              }
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                text: {
+                  var parts = []
+                  if (qd.modelData.subtitle !== "") parts.push(qd.modelData.subtitle)
+                  if (qd.modelData.duration) parts.push(root.formatTime(qd.modelData.duration))
+                  if (qd.modelData.current) parts.push(root.playing ? "Playing" : "Current")
+                  return parts.join("  ·  ")
+                }
+                color: root.mutedFg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+            }
+
+            PanelActionButton {
+              id: qUp
+              visible: qd.index > 0
+              iconText: "󰁝"
+              tooltipText: "Move up"
+              foreground: root.fg
+              onClicked: root.queueAction(["queue-move", qd.modelData.id, "-1"])
+            }
+            PanelActionButton {
+              id: qDown
+              visible: qd.index < root.queueRows.length - 1
+              iconText: "󰁅"
+              tooltipText: "Move down"
+              foreground: root.fg
+              onClicked: root.queueAction(["queue-move", qd.modelData.id, "1"])
+            }
+            PanelActionButton {
+              id: qDel
+              iconText: "󰆴"
+              tooltipText: "Remove from the queue"
+              foreground: root.fg
+              onClicked: root.queueAction(["queue-remove", qd.modelData.id])
+            }
+          }
+        }
+      }
+    }
+
+    // ---- right-click menu ---------------------------------------------------
+    // Click anywhere else to dismiss it.
+    MouseArea {
+      anchors.fill: parent
+      visible: root.menuItem !== null
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      onClicked: root.menuItem = null
+    }
+
+    Rectangle {
+      id: menuCard
+      visible: root.menuItem !== null
+      x: Math.max(0, Math.min(root.menuX, keyCatcher.width - width))
+      y: Math.max(0, Math.min(root.menuY, keyCatcher.height - height))
+      width: Style.space(220)
+      height: menuColumn.implicitHeight + Style.space(12)
+      radius: Style.cornerRadius
+      color: Color.popups.background
+      border.color: Color.popups.border
+      border.width: Math.max(1, Style.space(1))
+
+      Column {
+        id: menuColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(6)
+        spacing: Style.spacing.xxs
+        Button {
+          width: parent.width
+          leftAlign: true
+          iconText: "󰐊"
+          text: "Play now"
+          foreground: Color.popups.text
+          fontFamily: root.fontFamily
+          onClicked: root.enqueue(root.menuItem, "play")
+        }
+        Button {
+          width: parent.width
+          leftAlign: true
+          iconText: "󰒭"
+          text: "Play next"
+          foreground: Color.popups.text
+          fontFamily: root.fontFamily
+          onClicked: root.enqueue(root.menuItem, "next")
+        }
+        Button {
+          width: parent.width
+          leftAlign: true
+          iconText: "󰐕"
+          text: "Add to queue"
+          foreground: Color.popups.text
+          fontFamily: root.fontFamily
+          onClicked: root.enqueue(root.menuItem, "add")
         }
       }
     }

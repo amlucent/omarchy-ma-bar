@@ -90,6 +90,8 @@ BarWidget {
     function playPause(): void { root.control("playpause") }
     function next(): void { root.control("next") }
     function previous(): void { root.control("previous") }
+    function queue(): void { root.open(); if (panelLoader.item) panelLoader.item.queueView = true }
+    function library(): void { root.open(); if (panelLoader.item) panelLoader.item.queueView = false }
   }
 
   Timer {

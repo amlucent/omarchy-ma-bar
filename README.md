@@ -17,8 +17,14 @@ project or the Omarchy project.*
   speed for audiobooks and podcasts; a picker for which Music Assistant player to
   control; **Home** (continue and recently played), **Albums**, **Playlists**,
   **Books** and **Podcasts** tabs; search; click a podcast to see its episodes.
+- **Play queue:** the queue icon next to the transport buttons shows what's up
+  next. Click an item to jump to it, move it up or down, remove it, or clear the
+  queue.
+- **Right-click** any album, playlist, track, audiobook or episode for
+  **Play now**, **Play next** and **Add to queue**.
 - A connect form in the dropdown (gear icon) if you prefer it to the command line.
 - Keyboard: `Space` play / pause, `/` search, `Esc` back or close.
+- IPC for keybindings: `omarchy-shell music-assistant toggle | playPause | next | previous | queue | library`.
 
 ## Requirements
 
