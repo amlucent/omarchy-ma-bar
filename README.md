@@ -43,11 +43,17 @@ project or the Omarchy project.*
   up too. "Ungroup" dissolves an ad-hoc group. When the ticked speakers are different
   brands (and Music Assistant's Universal Group Player provider is enabled) the plugin offers
   a "Mixed brands" group type; those groups play the same audio but are not sample-synced.
-- **Sleep timer**: the moon button opens 15 / 30 / 45 / 60 / 90 minute presets, a custom
+- **Podcasts tab**: shows your unfinished episodes first, then the newest episodes across all
+  your shows (with how long ago they came out), then the shows themselves. Click a show to
+  see its own episodes.
+- **Mark as played / unplayed**: right-click an audiobook or podcast episode. "Reset progress"
+  appears for items you've started. For Audiobookshelf items the reset is also sent to
+  Audiobookshelf (Music Assistant doesn't forward it), so connect Audiobookshelf in Settings.
+- **Sleep timer**: the alarm-clock button opens 15 / 30 / 45 / 60 / 90 minute presets, a custom
   minutes box and (for audiobooks) "End of chapter". The bar shows the time left and the
   timer keeps running with the dropdown closed. When it ends playback is paused, not
   stopped, so your queue and position are kept.
-- IPC for keybindings: `omarchy-shell music-assistant toggle | playPause | next | previous | queue | chapters | bookmarks | sleepMenu | speakers | library`, plus `sleep <minutes>` and `sleepCancel`.
+- IPC for keybindings: `omarchy-shell music-assistant toggle | playPause | next | previous | queue | chapters | bookmarks | sleepMenu | speakers | library`, `tab <home|albums|playlists|audiobooks|podcasts>`, plus `sleep <minutes>` and `sleepCancel`.
 
 ## Requirements
 

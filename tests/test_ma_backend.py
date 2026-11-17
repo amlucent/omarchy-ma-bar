@@ -650,5 +650,88 @@ class SavedGroupTests(unittest.TestCase):
         self.assertEqual(ma.now_for_player("h", "t", "g", call=call)["groupSize"], 2)
 
 
+
+EPISODE_OLD = {"media_type": "podcast_episode", "name": "Old", "uri": "p://podcast_episode/1", "position": 1700000000000,
+               "podcast": {"name": "Show A"}, "duration": 100}
+EPISODE_NEW = {"media_type": "podcast_episode", "name": "New", "uri": "p://podcast_episode/2", "position": 1790000000000,
+               "podcast": {"name": "Show B"}, "duration": 200}
+
+
+class PodcastsHomeTests(unittest.TestCase):
+    def table(self, in_progress=()):
+        def call(base, token, command, args=None):
+            if command == "music/podcasts/library_items":
+                return [{"media_type": "podcast", "name": "A", "uri": "library://podcast/1"},
+                        {"media_type": "podcast", "name": "B", "uri": "library://podcast/2"}]
+            if command == "music/podcasts/podcast_episodes":
+                return [EPISODE_OLD] if args["item_id"] == "1" else [EPISODE_NEW]
+            if command == "music/in_progress_items":
+                return list(in_progress)
+            if command == "music/podcasts/podcast_episode":
+                raise ma.MaError("no detail")
+            raise AssertionError(command)
+        return call
+
+    def test_newest_first_across_shows(self):
+        out = ma.podcasts_home("h", "t", call=self.table())
+        self.assertEqual([i["name"] for i in out["newest"]], ["New", "Old"])
+        self.assertEqual([s["name"] for s in out["shows"]], ["A", "B"])
+        self.assertEqual(out["newest"][0]["published"], 1790000000)
+
+    def test_unfinished_are_listed_once_and_only_episodes(self):
+        started = dict(EPISODE_OLD, resume_position_ms=30000)
+        out = ma.podcasts_home("h", "t", call=self.table([started, AUDIOBOOK]))
+        self.assertEqual([i["name"] for i in out["continue"]], ["Old"])
+        self.assertEqual([i["name"] for i in out["newest"]], ["New"])
+
+    def test_one_broken_show_does_not_empty_the_tab(self):
+        base = self.table()
+
+        def call(b, t, command, args=None):
+            if command == "music/podcasts/podcast_episodes" and args["item_id"] == "1":
+                raise ma.MaError("feed down")
+            return base(b, t, command, args)
+        out = ma.podcasts_home("h", "t", call=call)
+        self.assertEqual([i["name"] for i in out["newest"]], ["New"])
+
+
+class MarkPlayedTests(unittest.TestCase):
+    def test_mark_played_sends_the_full_item(self):
+        item = {"item_id": "1", "duration": 321}
+        call = make_call({"music/podcasts/podcast_episode": item, "music/mark_played": None})
+        ma.mark_played("h", "t", "podcast_episode", "library://podcast_episode/1", True, call=call)
+        command, args = call.calls[-1]
+        self.assertEqual(command, "music/mark_played")
+        self.assertEqual((args["media_item"], args["fully_played"], args["seconds_played"]), (item, True, 321))
+
+    def test_unplayed_also_resets_audiobookshelf(self):
+        item = {"item_id": "x", "provider_mappings": [{"provider_domain": "audiobookshelf", "item_id": "lib1 ep2"}]}
+        call = make_call({"music/podcasts/podcast_episode": item, "music/mark_unplayed": None})
+        sent = []
+        ma.mark_played("h", "t", "podcast_episode", "p://podcast_episode/x", False, call=call,
+                       abs_ctx=lambda: ("http://abs", "tok"),
+                       abs_request=lambda base, tok, method, path, body: sent.append((method, path, body)))
+        self.assertEqual(sent, [("PATCH", "/api/me/progress/lib1/ep2",
+                                 {"isFinished": False, "progress": 0, "currentTime": 0})])
+
+    def test_unplayed_needs_audiobookshelf_for_its_items(self):
+        item = {"provider_mappings": [{"provider_domain": "audiobookshelf", "item_id": "lib1"}]}
+        call = make_call({"music/audiobooks/get": item, "music/mark_unplayed": None})
+
+        def not_connected():
+            raise ma.MaError("connect Audiobookshelf in the settings to use bookmarks")
+        with self.assertRaises(ma.MaError):
+            ma.mark_played("h", "t", "audiobook", "library://audiobook/1", False, call=call, abs_ctx=not_connected)
+
+    def test_mark_unplayed(self):
+        call = make_call({"music/audiobooks/get": {"item_id": "1"}, "music/mark_unplayed": None})
+        ma.mark_played("h", "t", "audiobook", "library://audiobook/1", False, call=call)
+        self.assertEqual(call.calls[-1][0], "music/mark_unplayed")
+
+    def test_other_types_are_refused(self):
+        with self.assertRaises(ma.MaError):
+            ma.mark_played("h", "t", "album", "library://album/1", True, call=make_call({}))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -270,7 +270,11 @@ def simplify(item, base_url=""):
     else:
         subtitle = ""
     resume_ms = item.get("resume_position_ms")
+    # For a podcast episode, MA keeps its publish time (ms since the epoch) in `position`.
+    pos = item.get("position")
+    published = int(pos / 1000) if mtype == "podcast_episode" and isinstance(pos, (int, float)) and pos > 10 ** 11 else None
     return {
+        "published": published,
         "uri": item.get("uri", ""),
         "name": item.get("name", ""),
         "type": mtype,
@@ -545,6 +549,84 @@ def home(base_url, token, limit=12, call=api_call):
     """What the dropdown's Home tab shows: things to continue, then recents."""
     return {"continue": with_resume(base_url, token, in_progress(base_url, token, limit, call=call), call=call),
             "recent": recently_played(base_url, token, limit, call=call)}
+
+
+def podcasts_home(base_url, token, recent=25, continue_limit=20, call=api_call):
+    """The Podcasts tab: unfinished episodes, the newest episodes across every
+    show, then the shows themselves."""
+    shows = [s for s in call(base_url, token, "music/podcasts/library_items", {"limit": 500}) or []
+             if isinstance(s, dict)]
+
+    def of_show(show):
+        provider, item_id = split_uri(show.get("uri", ""))
+        if not provider:
+            return []
+        try:
+            return call(base_url, token, "music/podcasts/podcast_episodes",
+                        {"item_id": item_id, "provider_instance_id_or_domain": provider}) or []
+        except MaError:
+            return []   # one broken feed shouldn't empty the tab
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        batches = list(pool.map(of_show, shows))
+    seen, newest = set(), []
+    for batch in batches:
+        for raw in batch:
+            item = simplify(raw, base_url)
+            if item and item["uri"] not in seen:
+                seen.add(item["uri"])
+                newest.append(item)
+    newest.sort(key=lambda i: i["published"] or 0, reverse=True)
+    unfinished = [i for i in in_progress(base_url, token, continue_limit, call=call) if i["type"] == "podcast_episode"]
+    unfinished_uris = set(i["uri"] for i in unfinished)
+    # The in-progress records are slim (no show name or date); fill them from the episode lists.
+    known = dict((i["uri"], i) for i in newest)
+    for item in unfinished:
+        full = known.get(item["uri"])
+        if full:
+            item["subtitle"] = item["subtitle"] or full["subtitle"]
+            item["published"] = item["published"] or full["published"]
+    return {
+        "continue": with_resume(base_url, token, unfinished, call=call),
+        "newest": [i for i in newest if i["uri"] not in unfinished_uris][:recent],
+        "shows": [i for i in (simplify(x, base_url) for x in shows) if i],
+    }
+
+
+MARKABLE = ("audiobook", "podcast_episode")
+
+
+def abs_progress_path(item):
+    """'/api/me/progress/<book>[/<episode>]' for an Audiobookshelf-backed item, else ''."""
+    raw = abs_item_id(item)
+    if not raw:
+        return ""
+    book, _sp, episode = raw.partition(" ")
+    path = "/api/me/progress/" + quote(book, safe="")
+    return path + "/" + quote(episode, safe="") if episode else path
+
+
+def mark_played(base_url, token, item_type, uri, played, call=api_call, abs_ctx=None, abs_request=abs_call):
+    """Mark a book or episode finished, or reset it to unplayed.
+
+    Music Assistant forwards "played" to Audiobookshelf but not "unplayed", and
+    it reads the played state back from Audiobookshelf, so resetting an
+    Audiobookshelf item has to be done there as well."""
+    if item_type not in MARKABLE:
+        raise MaError("only audiobooks and podcast episodes can be marked")
+    item = get_detail(base_url, token, item_type, uri, call=call)
+    if played:
+        call(base_url, token, "music/mark_played",
+             {"media_item": item, "fully_played": True, "seconds_played": int(item.get("duration") or 0),
+              "is_playing": False, "user_initiated": True})
+        return {"ok": True}
+    call(base_url, token, "music/mark_unplayed", {"media_item": item})
+    path = abs_progress_path(item)
+    if path:
+        abs_url, abs_token = abs_ctx()   # raises a friendly error when not connected
+        abs_request(abs_url, abs_token, "PATCH", path,
+                    {"isFinished": False, "progress": 0, "currentTime": 0})
+    return {"ok": True}
 
 
 def split_uri(uri):
@@ -938,6 +1020,13 @@ def main(argv):
             _emit(home(base, token))
         if cmd == "episodes":
             _emit(episodes(base, token, rest[0] if rest else ""))
+        if cmd == "podcasts-home":
+            _emit(podcasts_home(base, token))
+        if cmd == "mark":
+            # mark <audiobook|podcast_episode> <uri> <played|unplayed>
+            if len(rest) < 3 or rest[2] not in ("played", "unplayed"):
+                raise MaError("usage: mark <type> <uri> played|unplayed")
+            _emit(mark_played(base, token, rest[0], rest[1], rest[2] == "played", abs_ctx=_abs_ctx))
         if cmd == "in-progress":
             _emit(in_progress(base, token))
         if cmd == "recent":

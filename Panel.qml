@@ -338,6 +338,34 @@ Panel {
     if (mode === "play") refreshSoon.restart()
   }
 
+  readonly property var markable: ({ audiobook: true, podcast_episode: true })
+
+  function ago(sec) {
+    var d = Math.floor(Date.now() / 1000) - sec
+    if (d < 3600) return Math.max(1, Math.floor(d / 60)) + "m ago"
+    if (d < 86400) return Math.floor(d / 3600) + "h ago"
+    if (d < 86400 * 14) return Math.floor(d / 86400) + "d ago"
+    if (d < 86400 * 60) return Math.floor(d / (86400 * 7)) + "w ago"
+    return Math.floor(d / (86400 * 30)) + "mo ago"
+  }
+
+  function markItem(item, played) {
+    root.menuItem = null
+    markProc.pendingName = item.name
+    markProc.pendingPlayed = played
+    markProc.command = root.backend(["mark", item.type, item.uri, played ? "played" : "unplayed"])
+    markProc.running = true
+    // Show the change straight away; the list is re-read once the server confirms.
+    root.rows = root.rows.map(function(r) {
+      if (r.kind !== "item" || r.uri !== item.uri) return r
+      var o = {}
+      for (var k in r) o[k] = r[k]
+      o.played = played
+      if (!played) o.resume = null
+      return o
+    })
+  }
+
   function openMenu(item, x, y) {
     root.menuItem = item
     root.menuX = x
@@ -380,6 +408,7 @@ Panel {
     if (root.openPodcast) args = ["episodes", root.openPodcast.uri]
     else if (root.query !== "") args = ["search", root.query]
     else if (root.tab === "home") args = ["home"]
+    else if (root.tab === "podcasts") args = ["podcasts-home"]
     else args = ["library", root.tabTypes[root.tab], "60", "0"]
     root.loading = true
     root.listError = ""
@@ -397,6 +426,10 @@ Panel {
     }
     if (Array.isArray(result)) {
       addSection("", result)
+    } else if (result.newest !== undefined) {
+      addSection("Unfinished", result.continue)
+      addSection("New episodes", result.newest)
+      addSection("Shows", result.shows)
     } else if (result.continue !== undefined || result.recent !== undefined) {
       addSection("Continue", result.continue)
       addSection("Recently played", result.recent)
@@ -516,6 +549,20 @@ Panel {
   }
 
   Process { id: ctlProc }
+  Process {
+    id: markProc
+    property string pendingName: ""
+    property bool pendingPlayed: true
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var failed = ""
+        try { var r = JSON.parse(text); if (r.error) failed = r.error } catch (e) { failed = "Could not update the item" }
+        root.showNotice(failed !== "" ? failed : (markProc.pendingPlayed ? "Marked as played: " : "Marked as unplayed: ") + markProc.pendingName)
+        listReload.restart()
+      }
+    }
+  }
+  Timer { id: listReload; interval: 1200; onTriggered: root.loadList() }
   Process {
     id: speakersProc
     stdout: StdioCollector {
@@ -1077,7 +1124,7 @@ Panel {
             onClicked: root.toggleView("speakers")
           }
           PanelActionButton {
-            iconText: root.sleeping ? "󰒲" : "󰤄"
+            iconText: root.sleeping ? "󰀡" : "󰀠"
             tooltipText: root.sleeping ? "Sleep timer: " + root.sleepHost.formatLeft(root.sleepHost.sleepLeft) + " left" : "Sleep timer"
             foreground: root.sleepView || root.sleeping ? Color.accent : root.fg
             onClicked: root.toggleView("sleep")
@@ -1293,6 +1340,7 @@ Panel {
                     if (del.isHeader) return ""
                     var m = del.modelData, parts = []
                     parts.push(m.subtitle !== "" ? m.subtitle : (root.typeLabels[m.type] || ""))
+                    if (m.published) parts.push(root.ago(m.published))
                     if (m.resume && m.duration && m.resume < m.duration) parts.push(root.formatTime(m.duration - m.resume) + " left")
                     else if (m.duration) parts.push(root.formatTime(m.duration))
                     if (m.played) parts.push("Played")
@@ -2002,6 +2050,27 @@ Panel {
           foreground: Color.popups.text
           fontFamily: root.fontFamily
           onClicked: root.enqueue(root.menuItem, "add")
+        }
+        Button {
+          visible: root.menuItem !== null && root.markable[root.menuItem.type] === true
+          width: parent.width
+          leftAlign: true
+          iconText: root.menuItem && root.menuItem.played ? "󰄱" : "󰄲"
+          text: root.menuItem && root.menuItem.played ? "Mark as unplayed" : "Mark as played"
+          foreground: Color.popups.text
+          fontFamily: root.fontFamily
+          onClicked: root.markItem(root.menuItem, !root.menuItem.played)
+        }
+        Button {
+          visible: root.menuItem !== null && root.markable[root.menuItem.type] === true
+            && !root.menuItem.played && root.menuItem.resume > 0
+          width: parent.width
+          leftAlign: true
+          iconText: "󰑙"
+          text: "Reset progress"
+          foreground: Color.popups.text
+          fontFamily: root.fontFamily
+          onClicked: root.markItem(root.menuItem, false)
         }
       }
     }
