@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "music-assistant",
+  "name": "Music Assistant for Omarchy",
+  "version": "0.1.0",
+  "author": "Tony Lucent",
+  "license": "MIT",
+  "description": "Control Music Assistant from the Omarchy bar: now-playing, play/pause, skip, and (soon) a dropdown to browse and play music, audiobooks and podcasts.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Music Assistant",
+    "description": "Now-playing and playback controls for your Music Assistant server.",
+    "category": "Media",
+    "aliases": [
+      "music assistant",
+      "music",
+      "audiobooks",
+      "podcasts"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "pollSeconds": 3
+    },
+    "schema": [
+      {
+        "key": "pollSeconds",
+        "type": "integer",
+        "label": "Refresh now-playing every",
+        "min": 2,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 3,
+        "description": "Seconds between now-playing checks."
+      }
+    ]
+  }
+}
