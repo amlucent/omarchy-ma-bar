@@ -171,6 +171,9 @@ def api_call(base_url, token, command, args=None, opener=urlopen):
     except HTTPError as err:
         if err.code in (401, 403):
             raise MaError("the server rejected the token (create a new long-lived token)")
+        if err.code >= 500:
+            raise MaError("the server could not do that (a provider such as Spotify may be failing; "
+                          "check the Music Assistant log)")
         raise MaError("the server returned an error (HTTP %d)" % err.code)
     except (URLError, OSError):
         raise MaError("could not reach the Music Assistant server")

@@ -72,6 +72,13 @@ class HttpTests(unittest.TestCase):
         self.assertIn("token", str(ctx.exception))
         self.assertNotIn("tok\n", str(ctx.exception))
 
+    def test_server_error_is_explained(self):
+        from urllib.error import HTTPError
+        opener = mock.Mock(side_effect=HTTPError("http://h/api", 500, "boom", {}, None))
+        with self.assertRaises(ma.MaError) as ctx:
+            ma.api_call("http://h", "tok", "player_queues/play_media", opener=opener)
+        self.assertIn("log", str(ctx.exception))
+
     def test_unreachable(self):
         from urllib.error import URLError
         opener = mock.Mock(side_effect=URLError("down"))

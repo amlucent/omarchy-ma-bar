@@ -35,6 +35,15 @@ BarWidget {
   function control(action) {
     ctlProcess.command = backend(["ctl", action])
     ctlProcess.running = true
+    // The server reports the new state about a second or two after a command.
+    refreshSoon.restart()
+  }
+
+  function refresh() {
+    if (!nowProcess.running) {
+      nowProcess.command = root.backend(["now"])
+      nowProcess.running = true
+    }
   }
 
   implicitWidth: button.implicitWidth
@@ -45,12 +54,14 @@ BarWidget {
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: {
-      if (!nowProcess.running) {
-        nowProcess.command = root.backend(["now"])
-        nowProcess.running = true
-      }
-    }
+    onTriggered: root.refresh()
+  }
+
+  Timer {
+    id: refreshSoon
+    interval: 1500
+    repeat: false
+    onTriggered: root.refresh()
   }
 
   Process {
