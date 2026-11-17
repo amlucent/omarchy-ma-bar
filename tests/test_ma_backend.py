@@ -77,7 +77,15 @@ class HttpTests(unittest.TestCase):
         opener = mock.Mock(side_effect=HTTPError("http://h/api", 500, "boom", {}, None))
         with self.assertRaises(ma.MaError) as ctx:
             ma.api_call("http://h", "tok", "player_queues/play_media", opener=opener)
-        self.assertIn("log", str(ctx.exception))
+        self.assertIn("play", str(ctx.exception))
+        self.assertIn("Spotify", str(ctx.exception))
+
+    def test_server_error_on_a_lookup_does_not_blame_spotify(self):
+        from urllib.error import HTTPError
+        opener = mock.Mock(side_effect=HTTPError("http://h/api", 500, "boom", {}, None))
+        with self.assertRaises(ma.MaError) as ctx:
+            ma.api_call("http://h", "tok", "music/audiobooks/get", opener=opener)
+        self.assertNotIn("Spotify", str(ctx.exception))
 
     def test_unreachable(self):
         from urllib.error import URLError
@@ -183,10 +191,20 @@ class EpisodeAndHomeTests(unittest.TestCase):
             ma.episodes("http://h", "t", "nope", call=make_call({}))
 
     def test_home_has_both_sections(self):
-        call = make_call({"music/in_progress_items": [AUDIOBOOK], "music/recently_played_items": [TRACK]})
+        call = make_call({"music/in_progress_items": [AUDIOBOOK], "music/recently_played_items": [TRACK],
+                          "music/audiobooks/get": dict(AUDIOBOOK, resume_position_ms=1800000, duration=7200)})
         out = ma.home("http://h", "t", call=call)
         self.assertEqual(out["continue"][0]["name"], "Example Book")
+        self.assertEqual(out["continue"][0]["resume"], 1800.0)
+        self.assertEqual(out["continue"][0]["duration"], 7200)
         self.assertEqual(out["recent"][0]["name"], "Example Song")
+
+    def test_home_survives_a_failed_detail_lookup(self):
+        call = make_call({"music/in_progress_items": [AUDIOBOOK], "music/recently_played_items": [],
+                          "music/audiobooks/get": ma.MaError("boom")})
+        out = ma.home("http://h", "t", call=call)
+        self.assertEqual(out["continue"][0]["name"], "Example Book")
+        self.assertIsNone(out["continue"][0]["resume"])
 
     def test_now_full_adds_volume(self):
         call = make_call({
@@ -260,6 +278,143 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(call.calls[1][1]["index"], "c3")
         with self.assertRaises(ma.MaError):
             ma.queue_jump("h", "t", "q", "", call=call)
+
+
+BOOK_FULL = dict(AUDIOBOOK, resume_position_ms=15179000, duration=84845, fully_played=False,
+                 provider_mappings=[{"provider_domain": "audiobookshelf", "item_id": "abs-123"}],
+                 metadata={"chapters": [{"position": 1, "name": "One", "start": 0.0, "end": 100.0},
+                                        {"position": 2, "name": "Two", "start": 100.0, "end": None},
+                                        {"name": "broken"}]})
+
+
+class DetailTests(unittest.TestCase):
+    def test_split_uri_keeps_provider_case(self):
+        self.assertEqual(ma.split_uri("audiobookshelf--rcEcp4Jb://podcast_episode/abc def"),
+                         ("audiobookshelf--rcEcp4Jb", "abc def"))
+
+    def test_details(self):
+        call = make_call({"music/audiobooks/get": BOOK_FULL})
+        out = ma.details("h", "t", "audiobook", "library://audiobook/9", call=call)
+        self.assertEqual(out["resume"], 15179.0)
+        self.assertEqual(out["abs_id"], "abs-123")
+        self.assertEqual([c["name"] for c in out["chapters"]], ["One", "Two"])  # malformed one dropped
+        self.assertEqual(call.calls[0][1], {"item_id": "9", "provider_instance_id_or_domain": "library"})
+
+    def test_details_rejects_unsupported_type(self):
+        with self.assertRaises(ma.MaError):
+            ma.details("h", "t", "track", "library://track/1", call=make_call({}))
+
+    def test_abs_item_id_absent(self):
+        self.assertEqual(ma.abs_item_id({"provider_mappings": [{"provider_domain": "plex", "item_id": "x"}]}), "")
+
+    def test_fmt_time(self):
+        self.assertEqual(ma.fmt_time(75), "1:15")
+        self.assertEqual(ma.fmt_time(3725), "1:02:05")
+        self.assertEqual(ma.fmt_time(-5), "0:00")
+
+
+class FakeAbs:
+    """Stands in for urlopen against an Audiobookshelf server."""
+    def __init__(self, me=None):
+        self.requests = []
+        self.me = me if me is not None else {"bookmarks": []}
+
+    def __call__(self, req, timeout=None):
+        self.requests.append((req.get_method(), req.full_url, req.data, req.get_header("Authorization")))
+        if req.get_method() == "GET":
+            return FakeResponse(json.dumps(self.me).encode())
+        return FakeResponse(b"{}")
+
+
+class AbsBookmarkTests(unittest.TestCase):
+    ME = {"bookmarks": [
+        {"libraryItemId": "abs-123", "time": 900, "title": "Later", "createdAt": 2},
+        {"libraryItemId": "other", "time": 5, "title": "Not this book", "createdAt": 3},
+        {"libraryItemId": "abs-123", "time": 60, "title": "Early", "createdAt": 1},
+    ]}
+
+    def test_filters_to_the_book_and_sorts_by_time(self):
+        out = ma.abs_bookmarks("http://abs", "tok", "abs-123", opener=FakeAbs(self.ME))
+        self.assertEqual([(b["time"], b["title"]) for b in out], [(60, "Early"), (900, "Later")])
+
+    def test_sends_bearer_token(self):
+        fake = FakeAbs(self.ME)
+        ma.abs_bookmarks("http://abs", "tok", "abs-123", opener=fake)
+        self.assertEqual(fake.requests[0][3], "Bearer tok")
+        self.assertEqual(fake.requests[0][1], "http://abs/api/me")
+
+    def test_add_defaults_title_and_sends_integer_seconds(self):
+        fake = FakeAbs()
+        out = ma.abs_add_bookmark("http://abs", "tok", "abs-123", "3725.8", opener=fake)
+        method, url, data, _auth = fake.requests[0]
+        self.assertEqual((method, url), ("POST", "http://abs/api/me/item/abs-123/bookmark"))
+        self.assertEqual(json.loads(data), {"time": 3725, "title": "Bookmark @ 1:02:05"})
+        self.assertEqual(out["title"], "Bookmark @ 1:02:05")
+
+    def test_add_keeps_a_given_title(self):
+        fake = FakeAbs()
+        ma.abs_add_bookmark("http://abs", "tok", "abs-123", 10, "  The twist  ", opener=fake)
+        self.assertEqual(json.loads(fake.requests[0][2])["title"], "The twist")
+
+    def test_delete(self):
+        fake = FakeAbs()
+        ma.abs_delete_bookmark("http://abs", "tok", "abs-123", "60", opener=fake)
+        self.assertEqual(fake.requests[0][:2], ("DELETE", "http://abs/api/me/item/abs-123/bookmark/60"))
+
+    def test_item_id_is_url_quoted(self):
+        fake = FakeAbs()
+        ma.abs_delete_bookmark("http://abs", "tok", "a/b", 1, opener=fake)
+        self.assertIn("/item/a%2Fb/", fake.requests[0][1])
+
+    def test_plain_text_reply_to_a_write_is_fine(self):
+        opener = mock.Mock(return_value=FakeResponse(b"OK"))
+        self.assertIsNone(ma.abs_call("http://abs", "tok", "DELETE", "/x", opener=opener))
+
+    def test_plain_text_reply_to_a_read_is_an_error(self):
+        opener = mock.Mock(return_value=FakeResponse(b"<html>"))
+        with self.assertRaises(ma.MaError):
+            ma.abs_call("http://abs", "tok", "GET", "/api/me", opener=opener)
+
+    def test_errors_are_explained(self):
+        from urllib.error import HTTPError
+        for code, word in ((401, "token"), (404, "find"), (500, "error")):
+            opener = mock.Mock(side_effect=HTTPError("u", code, "x", {}, None))
+            with self.assertRaises(ma.MaError) as ctx:
+                ma.abs_call("http://abs", "tok", "GET", "/api/me", opener=opener)
+            self.assertIn(word, str(ctx.exception))
+
+
+class GoToTests(unittest.TestCase):
+    def make(self, current_sequence):
+        calls, seq = [], list(current_sequence)
+
+        def call(base, token, command, args=None):
+            calls.append((command, args))
+            if command == "player_queues/get":
+                uri = seq.pop(0) if len(seq) > 1 else seq[0]
+                return {"current_item": {"media_item": {"uri": uri}}}
+            return None
+        call.calls = calls
+        return call
+
+    def test_already_playing_just_seeks(self):
+        call = self.make(["u1"])
+        ma.go_to("h", "t", "q", "u1", 120.7, call=call, sleep=lambda s: None)
+        cmds = [c[0] for c in call.calls]
+        self.assertNotIn("player_queues/play_media", cmds)
+        self.assertEqual(call.calls[-1], ("player_queues/seek", {"queue_id": "q", "position": 120}))
+
+    def test_starts_the_item_then_seeks(self):
+        call = self.make(["other", "other", "u1"])
+        ma.go_to("h", "t", "q", "u1", 30, call=call, sleep=lambda s: None)
+        cmds = [c[0] for c in call.calls]
+        self.assertLess(cmds.index("player_queues/play_media"), cmds.index("player_queues/seek"))
+
+    def test_gives_up_if_it_never_starts(self):
+        call = self.make(["other"])
+        with self.assertRaises(ma.MaError):
+            ma.go_to("h", "t", "q", "u1", 30, call=call, sleep=lambda s: None, tries=3)
+        self.assertNotIn("player_queues/seek", [c[0] for c in call.calls])
 
 
 class QueryTests(unittest.TestCase):

@@ -14,12 +14,14 @@ import socket
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 KEYRING_SERVICE = "omarchy-music-assistant"
 KEYRING_ACCOUNT = "api-token"
+ABS_KEYRING_ACCOUNT = "abs-api-token"
 CONFIG_DIR = os.path.join(
     os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
     "omarchy-music-assistant",
@@ -90,7 +92,7 @@ def normalize_base_url(raw):
 
 # -------------------------------------------------------------------- keyring
 
-def store_token(token):
+def store_token(token, account=KEYRING_ACCOUNT, label="Music Assistant plugin token"):
     """Pipe the token into secret-tool on stdin (never argv, so it cannot show
     up in the process list)."""
     token = (token or "").strip()
@@ -98,8 +100,8 @@ def store_token(token):
         raise MaError("no token received")
     try:
         proc = subprocess.run(
-            ["secret-tool", "store", "--label=Music Assistant plugin token",
-             "service", KEYRING_SERVICE, "account", KEYRING_ACCOUNT],
+            ["secret-tool", "store", "--label=" + label,
+             "service", KEYRING_SERVICE, "account", account],
             input=token, text=True, capture_output=True, timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -108,14 +110,13 @@ def store_token(token):
         raise MaError("could not save the token to the system keyring")
 
 
-def load_token():
-    # Dev/test override; never written anywhere.
-    env = os.environ.get("MA_PLUGIN_TOKEN")
+def load_token(account=KEYRING_ACCOUNT, env_name="MA_PLUGIN_TOKEN"):
+    env = os.environ.get(env_name)  # dev/test override; never written anywhere
     if env:
         return env.strip()
     try:
         proc = subprocess.run(
-            ["secret-tool", "lookup", "service", KEYRING_SERVICE, "account", KEYRING_ACCOUNT],
+            ["secret-tool", "lookup", "service", KEYRING_SERVICE, "account", account],
             capture_output=True, text=True, timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -123,10 +124,10 @@ def load_token():
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def clear_token():
+def clear_token(account=KEYRING_ACCOUNT):
     try:
         subprocess.run(
-            ["secret-tool", "clear", "service", KEYRING_SERVICE, "account", KEYRING_ACCOUNT],
+            ["secret-tool", "clear", "service", KEYRING_SERVICE, "account", account],
             capture_output=True, timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -172,8 +173,10 @@ def api_call(base_url, token, command, args=None, opener=urlopen):
         if err.code in (401, 403):
             raise MaError("the server rejected the token (create a new long-lived token)")
         if err.code >= 500:
-            raise MaError("the server could not do that (a provider such as Spotify may be failing; "
-                          "check the Music Assistant log)")
+            if command.startswith("player_queues/"):
+                raise MaError("the server could not play that (a provider such as Spotify may be failing; "
+                              "check the Music Assistant log)")
+            raise MaError("the server could not find or load that item (see the Music Assistant log)")
         raise MaError("the server returned an error (HTTP %d)" % err.code)
     except (URLError, OSError):
         raise MaError("could not reach the Music Assistant server")
@@ -181,6 +184,36 @@ def api_call(base_url, token, command, args=None, opener=urlopen):
         return json.loads(raw.decode("utf-8"))
     except ValueError:
         raise MaError("the server sent a response I could not read")
+
+
+def abs_call(base_url, token, method, path, body=None, opener=urlopen):
+    """One request to an Audiobookshelf server; returns decoded JSON (or None)."""
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"Authorization": "Bearer " + token}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = Request(base_url + path, data=data, method=method, headers=headers)
+    try:
+        with opener(req, timeout=TIMEOUT_S) as resp:
+            raw = read_limited(resp)
+    except HTTPError as err:
+        if err.code in (401, 403):
+            raise MaError("Audiobookshelf rejected the token")
+        if err.code == 404:
+            raise MaError("Audiobookshelf could not find that item")
+        raise MaError("Audiobookshelf returned an error (HTTP %d)" % err.code)
+    except (URLError, OSError):
+        raise MaError("could not reach the Audiobookshelf server")
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError:
+        # Audiobookshelf answers some writes (a delete) with plain text such as
+        # "OK"; only a read has to be JSON.
+        if method != "GET":
+            return None
+        raise MaError("Audiobookshelf sent a response I could not read")
 
 
 # ---------------------------------------------------------------- normalizing
@@ -273,6 +306,7 @@ def simplify_queue(queue, base_url=""):
             "name": current.get("name") or media.get("name", ""),
             "duration": current.get("duration"),
             "type": media.get("media_type", ""),
+            "uri": media.get("uri", ""),
             "subtitle": (_names(media.get("artists")) or _names(media.get("authors"))
                          or (media.get("podcast") or {}).get("name", "")),
             "cover": cover_url(base_url, image_ref(current) or image_ref(media)),
@@ -345,16 +379,18 @@ def recently_played(base_url, token, limit=20, call=api_call):
 
 def home(base_url, token, limit=12, call=api_call):
     """What the dropdown's Home tab shows: things to continue, then recents."""
-    return {"continue": in_progress(base_url, token, limit, call=call),
+    return {"continue": with_resume(base_url, token, in_progress(base_url, token, limit, call=call), call=call),
             "recent": recently_played(base_url, token, limit, call=call)}
 
 
 def split_uri(uri):
-    """'library://podcast/12' -> ('library', '12'); anything else -> ('', '')."""
-    parts = urlsplit(uri or "")
-    item_id = parts.path.lstrip("/")
-    if parts.scheme and parts.netloc and item_id:
-        return parts.scheme, item_id
+    """'library://podcast/12' -> ('library', '12'); anything else -> ('', '').
+    Provider instance ids are case-sensitive, so the string is cut by hand
+    rather than with urlsplit (which lower-cases the scheme)."""
+    scheme, sep, rest = (uri or "").partition("://")
+    _kind, slash, item_id = rest.partition("/")
+    if scheme and sep and slash and item_id:
+        return scheme, item_id
     return "", ""
 
 
@@ -444,6 +480,122 @@ def queue_clear(base_url, token, queue_id, call=api_call):
     return {"ok": True}
 
 
+DETAIL_COMMANDS = {
+    "audiobook": "music/audiobooks/get",
+    "podcast_episode": "music/podcasts/podcast_episode",
+}
+
+
+def get_detail(base_url, token, item_type, uri, call=api_call):
+    """The full item (the lists only carry slim records without resume data)."""
+    command = DETAIL_COMMANDS.get(item_type)
+    provider, item_id = split_uri(uri)
+    if not command or not provider:
+        raise MaError("no details for that kind of item")
+    item = call(base_url, token, command, {"item_id": item_id, "provider_instance_id_or_domain": provider})
+    if not isinstance(item, dict):
+        raise MaError("the server sent no details")
+    return item
+
+
+def clean_chapters(item):
+    out = []
+    for c in ((item.get("metadata") or {}).get("chapters") or []):
+        if isinstance(c, dict) and c.get("start") is not None:
+            out.append({"position": c.get("position", len(out) + 1), "name": c.get("name") or "",
+                        "start": float(c["start"]), "end": c.get("end")})
+    return out
+
+
+def details(base_url, token, item_type, uri, call=api_call):
+    """Chapters, resume position and the Audiobookshelf id for one item."""
+    item = get_detail(base_url, token, item_type, uri, call=call)
+    resume_ms = item.get("resume_position_ms")
+    return {
+        "duration": item.get("duration"),
+        "resume": (resume_ms / 1000.0) if isinstance(resume_ms, (int, float)) else None,
+        "played": bool(item.get("fully_played")),
+        "chapters": clean_chapters(item),
+        "abs_id": abs_item_id(item),
+    }
+
+
+def abs_item_id(item):
+    for m in (item or {}).get("provider_mappings") or []:
+        if m.get("provider_domain") == "audiobookshelf" and m.get("item_id"):
+            return m["item_id"]
+    return ""
+
+
+def with_resume(base_url, token, items, call=api_call):
+    """Fill in resume position and exact duration for in-progress rows."""
+    def fill(item):
+        if item["type"] not in DETAIL_COMMANDS:
+            return item
+        try:
+            full = get_detail(base_url, token, item["type"], item["uri"], call=call)
+        except Exception:  # best effort: a failed lookup must not break the Home feed
+            return item
+        resume_ms = full.get("resume_position_ms")
+        if isinstance(resume_ms, (int, float)):
+            item["resume"] = resume_ms / 1000.0
+        if full.get("duration"):
+            item["duration"] = full["duration"]
+        if item["type"] == "audiobook" and not item["subtitle"]:
+            item["subtitle"] = _names(full.get("authors"))
+        return item
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        return list(pool.map(fill, items))
+
+
+def abs_bookmarks(abs_url, abs_token, abs_id, opener=urlopen):
+    me = abs_call(abs_url, abs_token, "GET", "/api/me", opener=opener)
+    marks = [b for b in (me or {}).get("bookmarks") or [] if b.get("libraryItemId") == abs_id]
+    marks.sort(key=lambda b: b.get("time", 0))
+    return [{"time": b.get("time", 0), "title": b.get("title", ""), "created": b.get("createdAt")}
+            for b in marks]
+
+
+def fmt_time(seconds):
+    seconds = int(max(0, seconds))
+    h, m, s = seconds // 3600, (seconds % 3600) // 60, seconds % 60
+    return "%d:%02d:%02d" % (h, m, s) if h else "%d:%02d" % (m, s)
+
+
+def abs_add_bookmark(abs_url, abs_token, abs_id, seconds, title="", opener=urlopen):
+    seconds = int(float(seconds))
+    title = (title or "").strip() or "Bookmark @ " + fmt_time(seconds)
+    abs_call(abs_url, abs_token, "POST", "/api/me/item/%s/bookmark" % quote(abs_id, safe=""),
+             {"time": seconds, "title": title}, opener=opener)
+    return {"ok": True, "time": seconds, "title": title}
+
+
+def abs_delete_bookmark(abs_url, abs_token, abs_id, seconds, opener=urlopen):
+    abs_call(abs_url, abs_token, "DELETE",
+             "/api/me/item/%s/bookmark/%d" % (quote(abs_id, safe=""), int(float(seconds))), opener=opener)
+    return {"ok": True}
+
+
+def current_media_uri(base_url, token, queue_id, call=api_call):
+    queue = call(base_url, token, "player_queues/get", {"queue_id": queue_id})
+    current = (queue or {}).get("current_item") or {}
+    return (current.get("media_item") or {}).get("uri", "")
+
+
+def go_to(base_url, token, queue_id, uri, seconds, call=api_call, sleep=time.sleep, tries=24):
+    """Play `uri` (unless it is already playing) and seek to `seconds`."""
+    if current_media_uri(base_url, token, queue_id, call=call) != uri:
+        call(base_url, token, "player_queues/play_media", {"queue_id": queue_id, "media": uri})
+        for _ in range(tries):
+            sleep(0.5)
+            if current_media_uri(base_url, token, queue_id, call=call) == uri:
+                break
+        else:
+            raise MaError("the item did not start in time")
+    call(base_url, token, "player_queues/seek", {"queue_id": queue_id, "position": int(float(seconds))})
+    return {"ok": True}
+
+
 CONTROLS = {
     "playpause": ("player_queues/play_pause", lambda a: {}),
     "next": ("player_queues/next", lambda a: {}),
@@ -496,6 +648,15 @@ def _need_setup():
     return url, token
 
 
+def _abs_ctx():
+    config = load_config()
+    token = load_token(ABS_KEYRING_ACCOUNT, "MA_PLUGIN_ABS_TOKEN")
+    url = os.environ.get("MA_PLUGIN_ABS_URL") or config.get("absUrl", "")
+    if not url or not token:
+        raise MaError("connect Audiobookshelf in the settings to use bookmarks")
+    return url, token
+
+
 def main(argv):
     if len(argv) < 2:
         _emit({"error": "usage: ma_backend.py <command> [args]"}, 1)
@@ -518,10 +679,33 @@ def main(argv):
             _emit({"ok": True, "serverUrl": base})
         if cmd == "disconnect":
             clear_token()
+            clear_token(ABS_KEYRING_ACCOUNT)
             try:
                 os.remove(CONFIG_PATH)
             except OSError:
                 pass
+            _emit({"ok": True})
+        if cmd == "abs-status":
+            config = load_config()
+            token = load_token(ABS_KEYRING_ACCOUNT, "MA_PLUGIN_ABS_TOKEN")
+            url = os.environ.get("MA_PLUGIN_ABS_URL") or config.get("absUrl", "")
+            _emit({"configured": bool(url and token), "absUrl": url})
+        if cmd == "abs-setup":
+            base = normalize_base_url(rest[0] if rest else "")
+            token = sys.stdin.readline().strip()
+            if not token:
+                raise MaError("no token received")
+            abs_call(base, token, "GET", "/api/me")  # verify before saving anything
+            store_token(token, ABS_KEYRING_ACCOUNT, "Audiobookshelf token (Music Assistant plugin)")
+            config = load_config()
+            config["absUrl"] = base
+            save_config(config)
+            _emit({"ok": True, "absUrl": base})
+        if cmd == "abs-disconnect":
+            clear_token(ABS_KEYRING_ACCOUNT)
+            config = load_config()
+            config.pop("absUrl", None)
+            save_config(config)
             _emit({"ok": True})
         if cmd == "set-player":
             config = load_config()
@@ -534,7 +718,7 @@ def main(argv):
         base, token = _need_setup()
         configured = os.environ.get("MA_PLUGIN_QUEUE") or load_config().get("playerId", "")
         queue_id = configured
-        if cmd in ("now", "play", "ctl", "queue", "enqueue", "queue-remove", "queue-move", "queue-jump", "queue-clear") and not configured and not (cmd == "now" and rest):
+        if cmd in ("now", "play", "ctl", "queue", "enqueue", "queue-remove", "queue-move", "queue-jump", "queue-clear", "bookmark-go") and not configured and not (cmd == "now" and rest):
             queue_id = resolve_queue(base, token)
             if not queue_id:
                 raise MaError("no player selected and this computer has no Music Assistant player")
@@ -558,6 +742,21 @@ def main(argv):
             _emit(in_progress(base, token))
         if cmd == "recent":
             _emit(recently_played(base, token))
+        if cmd == "details":
+            _emit(details(base, token, rest[0] if rest else "", rest[1] if len(rest) > 1 else ""))
+        if cmd in ("bookmarks", "bookmark-add", "bookmark-delete", "bookmark-go"):
+            uri = rest[0] if rest else ""
+            abs_url, abs_token = _abs_ctx()
+            abs_id = abs_item_id(get_detail(base, token, "audiobook", uri))
+            if not abs_id:
+                raise MaError("bookmarks are only available for Audiobookshelf audiobooks")
+            if cmd == "bookmarks":
+                _emit(abs_bookmarks(abs_url, abs_token, abs_id))
+            if cmd == "bookmark-add":
+                _emit(abs_add_bookmark(abs_url, abs_token, abs_id, rest[1], " ".join(rest[2:])))
+            if cmd == "bookmark-delete":
+                _emit(abs_delete_bookmark(abs_url, abs_token, abs_id, rest[1]))
+            _emit(go_to(base, token, queue_id, uri, rest[1]))
         if cmd == "queue":
             _emit(queue_items(base, token, queue_id))
         if cmd == "enqueue":
