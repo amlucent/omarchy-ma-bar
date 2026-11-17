@@ -3,10 +3,10 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-// Bar entry point. v0.1: a music-note glyph that reflects what the selected
-// Music Assistant player is doing. Left click toggles play/pause, middle click
-// skips to the next item. The dropdown (browse / search / audiobooks /
-// podcasts) is the next milestone.
+// Bar entry point: a music-note glyph that reflects what the selected Music
+// Assistant player is doing, hosting the dropdown in Panel.qml. Left click
+// opens the dropdown, middle click plays / pauses, right click skips to the
+// next item.
 BarWidget {
   id: root
   moduleName: "music-assistant"
@@ -46,8 +46,51 @@ BarWidget {
     }
   }
 
+  function injectPanel() {
+    var target = panelLoader.item
+    if (!target) return
+    if ("bar" in target) target.bar = root.bar
+    if ("settings" in target) target.settings = root.settings
+    if ("anchorItem" in target) target.anchorItem = button
+    if ("hostWidget" in target) target.hostWidget = root
+  }
+
+  // Shape contract for shell.summon/hide/toggle routing (Bar.findPanelWidget).
+  readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+  function open() { if (panelLoader.item) panelLoader.item.open() }
+  function close() { if (panelLoader.item) panelLoader.item.close() }
+  function togglePanel() { if (panelLoader.item) panelLoader.item.toggle() }
+  readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
+  function closeForPopoutSwitch() { if (panelLoader.item) panelLoader.item.closeForPopoutSwitch() }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
+
+  onBarChanged: injectPanel()
+  onSettingsChanged: injectPanel()
+
+  Loader {
+    id: panelLoader
+    active: true
+    source: Qt.resolvedUrl("Panel.qml")
+    visible: false
+    onLoaded: {
+      root.injectPanel()
+      Qt.callLater(root.injectPanel)
+    }
+  }
+
+  IpcHandler {
+    target: "music-assistant"
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.togglePanel() }
+    function playPause(): void { root.control("playpause") }
+    function next(): void { root.control("next") }
+    function previous(): void { root.control("previous") }
+  }
 
   Timer {
     interval: Math.max(2, root.setting("pollSeconds", 3)) * 1000
@@ -99,8 +142,9 @@ BarWidget {
     active: root.playing
     dimmed: !root.configured || !root.reachable
     onPressed: function(b) {
-      if (b === Qt.MiddleButton) root.control("next")
-      else root.control("playpause")
+      if (b === Qt.MiddleButton) root.control("playpause")
+      else if (b === Qt.RightButton) root.control("next")
+      else root.togglePanel()
     }
   }
 }

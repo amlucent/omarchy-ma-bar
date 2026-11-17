@@ -1,9 +1,9 @@
 # Music Assistant for Omarchy
 
 Control a [Music Assistant](https://www.music-assistant.io/) server from the
-Omarchy bar. Early development (v0.1): now-playing state and play/pause/skip
-from the bar icon. A dropdown to browse and play music, audiobooks and podcasts
-is planned.
+Omarchy bar. Early development (v0.2): a bar icon plus a dropdown with
+now-playing controls, a player picker, Home / Albums / Playlists / Books /
+Podcasts tabs, and search across music, audiobooks and podcasts.
 
 *An independent client. Not affiliated with or endorsed by the Music Assistant
 project or the Omarchy project.*
@@ -11,12 +11,14 @@ project or the Omarchy project.*
 ## What works today
 
 - Bar icon showing whether your player is playing, with a tooltip of the current
-  title and artist/author.
-- Left click: play / pause. Middle click: next.
-- The backend (`scripts/ma_backend.py`) already supports searching, listing
-  albums, artists, playlists, tracks, audiobooks and podcasts, in-progress and
-  recently played items, player selection, seek, volume and playback speed. The
-  dropdown that uses them is the next milestone.
+  title and artist/author. Left click opens the dropdown, middle click plays /
+  pauses, right click skips to the next item.
+- Dropdown: cover, title, seek bar, previous / play / next, volume, and playback
+  speed for audiobooks and podcasts; a picker for which Music Assistant player to
+  control; **Home** (continue and recently played), **Albums**, **Playlists**,
+  **Books** and **Podcasts** tabs; search; click a podcast to see its episodes.
+- A connect form in the dropdown (gear icon) if you prefer it to the command line.
+- Keyboard: `Space` play / pause, `/` search, `Esc` back or close.
 
 ## Requirements
 
