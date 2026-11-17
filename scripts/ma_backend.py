@@ -373,7 +373,8 @@ def now_for_player(base_url, token, player_id, full=False, call=api_call):
     out["id"] = player_id
     out["leader"] = lid
     # MA lists the leader among its own group members once a group exists.
-    out["groupSize"] = len(set([lid] + list((leader or {}).get("group_childs") or [])))
+    childs = list((leader or {}).get("group_childs") or [])
+    out["groupSize"] = len(childs) if _is_group(leader or {}) else len(set([lid] + childs))
     if full:
         player = leader or {}
         out["volume"] = player.get("volume_level")
@@ -412,7 +413,7 @@ def speakers(base_url, token, player_id, call=api_call):
         })
     rows.sort(key=lambda r: (not r["leader"], not r["member"], r["name"].lower()))
     return {"leader": lid, "leaderName": leader.get("display_name") or leader.get("name", ""),
-            "canGroup": _can_group(leader), "speakers": rows}
+            "canGroup": _can_group(leader), "isGroup": _is_group(leader), "speakers": rows}
 
 
 def group_members(base_url, token, player_id, add=(), remove=(), call=api_call):
@@ -447,60 +448,42 @@ def set_player_mute(base_url, token, player_id, muted, call=api_call):
     return {"ok": True}
 
 
-# ------------------------------------------------------------ group presets
-# Named sets of players the user applies in one click. Only player ids and a
-# label are kept, in the local config file (never in the repo).
+# ------------------------------------------------------- Music Assistant groups
+# Saved groups are real Music Assistant group players (the Sync Group provider),
+# so they show up in every Music Assistant client, not only in this plugin.
 
-MAX_PRESETS = 20
-
-
-def load_presets(config):
-    out = []
-    for p in config.get("groupPresets") or []:
-        if isinstance(p, dict) and isinstance(p.get("name"), str) and isinstance(p.get("players"), list):
-            out.append({"name": p["name"], "players": [str(x) for x in p["players"]]})
-    return out
+GROUP_PROVIDER = "sync_group"
 
 
-def save_preset(config, name, players):
+def save_group(base_url, token, selected_id, name, members, call=api_call):
+    """Create a permanent group player from `members`. Members are the speakers
+    currently ticked; any ad-hoc group they form is dissolved first so the two
+    don't fight over the same speakers."""
     name = (name or "").strip()[:40]
-    players = [p for p in dict.fromkeys(players) if p]
+    members = [m for m in dict.fromkeys(members) if m]
     if not name:
-        raise MaError("give the preset a name")
-    if len(players) < 2:
-        raise MaError("a preset needs at least two players")
-    presets = [p for p in load_presets(config) if p["name"].lower() != name.lower()]
-    if len(presets) >= MAX_PRESETS:
-        raise MaError("too many presets; delete one first")
-    presets.append({"name": name, "players": players})
-    config["groupPresets"] = presets
-    return presets
+        raise MaError("give the group a name")
+    if len(members) < 2:
+        raise MaError("a group needs at least two speakers")
+    lid, leader = leader_of(base_url, token, selected_id, call=call) if selected_id else ("", None)
+    if lid in members and (leader or {}).get("type") != "group":
+        ungroup(base_url, token, selected_id, call=call)
+    made = call(base_url, token, "players/create_group_player",
+                {"provider": GROUP_PROVIDER, "name": name, "members": members, "dynamic": True})
+    return {"ok": True, "id": (made or {}).get("player_id", "")}
 
 
-def delete_preset(config, name):
-    config["groupPresets"] = [p for p in load_presets(config) if p["name"].lower() != (name or "").lower()]
-    return config["groupPresets"]
-
-
-def apply_preset(base_url, token, preset, call=api_call):
-    """Make exactly these players one group. The first available player leads."""
-    players = {p.get("player_id"): p for p in call(base_url, token, "players/all") if isinstance(p, dict)}
-    wanted = [pid for pid in preset["players"] if (players.get(pid) or {}).get("available")]
-    missing = [pid for pid in preset["players"] if pid not in wanted]
-    if not wanted:
-        raise MaError("none of the preset's players are available")
-    lead = wanted[0]
-    if _leader_id(players[lead]) != lead:
-        call(base_url, token, "players/cmd/ungroup", {"player_id": lead})
-        current = []
-    else:
-        current = [c for c in (players[lead].get("group_childs") or []) if c != lead]
-    add = [pid for pid in wanted[1:] if pid not in current]
-    remove = [pid for pid in current if pid not in wanted]
-    if add or remove:
-        call(base_url, token, "players/cmd/set_members",
-             {"target_player": lead, "player_ids_to_add": add or None, "player_ids_to_remove": remove or None})
-    return {"ok": True, "leader": lead, "missing": missing}
+def delete_group(base_url, token, player_id, call=api_call):
+    """Remove a group player. Refuses anything that isn't a group, so a real
+    speaker can never be deleted from here."""
+    try:
+        player = call(base_url, token, "players/get", {"player_id": player_id})
+    except MaError:
+        player = None
+    if not isinstance(player, dict) or not _is_group(player):
+        raise MaError("that isn't a group")
+    call(base_url, token, "players/remove_group_player", {"player_id": player_id})
+    return {"ok": True}
 
 
 def search(base_url, token, query, limit=8, call=api_call):
@@ -914,26 +897,20 @@ def main(argv):
             _emit(set_player_volume(base, token, rest[0], rest[1]))
         if cmd == "player-mute":
             _emit(set_player_mute(base, token, rest[0], rest[1] in ("1", "true", "yes")))
-        if cmd == "presets":
-            _emit(load_presets(load_config()))
-        if cmd == "preset-save":
+        if cmd == "group-save":
+            # group-save <name> <player id>...  (also switches the panel to the new group)
+            made = save_group(base, token, queue_id, rest[0] if rest else "", rest[1:])
             config = load_config()
-            presets = save_preset(config, rest[0] if rest else "", rest[1:])
+            config["playerId"] = made["id"]
+            config.pop("groupPresets", None)
             save_config(config)
-            _emit(presets)
-        if cmd == "preset-delete":
+            _emit(made)
+        if cmd == "group-delete":
+            result = delete_group(base, token, rest[0] if rest else "")
             config = load_config()
-            presets = delete_preset(config, rest[0] if rest else "")
-            save_config(config)
-            _emit(presets)
-        if cmd == "preset-apply":
-            config = load_config()
-            found = [p for p in load_presets(config) if p["name"].lower() == (rest[0] if rest else "").lower()]
-            if not found:
-                raise MaError("no such preset")
-            result = apply_preset(base, token, found[0])
-            config["playerId"] = result["leader"]
-            save_config(config)
+            if config.get("playerId") == (rest[0] if rest else ""):
+                config["playerId"] = ""
+                save_config(config)
             _emit(result)
         if cmd == "now":
             _emit(now_for_player(base, token, rest[0] if rest else queue_id, full=full))

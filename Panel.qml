@@ -79,7 +79,10 @@ Panel {
   property string speakersLeaderName: ""
   property bool speakersCanGroup: true
   property string speakersError: ""
-  property var presets: []
+  property bool speakersIsGroup: false
+  property string confirmDeleteId: ""
+  readonly property var groupPlayers: root.playerEntries.filter(function(p) { return p.isGroup })
+  property var playerEntries: []
   property var groupQueue: []
   property double speakersHoldUntil: 0
   property int groupSize: 1
@@ -160,7 +163,6 @@ Panel {
 
   function loadSpeakers() {
     if (!speakersProc.running) { speakersProc.command = root.backend(["speakers", root.playerId]); speakersProc.running = true }
-    if (!presetsProc.running) presetsProc.running = true
   }
   function groupCmd(args) {
     root.groupQueue = root.groupQueue.concat([args])
@@ -209,23 +211,22 @@ Panel {
     root.speakersHoldUntil = Date.now() + 3000
     root.groupCmd(["ungroup", root.playerId])
   }
-  function savePreset() {
-    var name = presetName.text.trim()
+  function saveGroup() {
+    var name = groupName.text.trim()
     if (name === "") { root.speakersError = "Give the group a name first."; return }
     var ids = root.speakers.filter(function(r) { return r.member }).map(function(r) { return r.id })
-    root.groupCmd(["preset-save", name].concat(ids))
-    presetName.text = ""
-  }
-  function applyPreset(name) {
     root.speakersError = ""
-    root.groupCmd(["preset-apply", name])
+    root.groupCmd(["group-save", name].concat(ids))
+    groupName.text = ""
   }
-  function presetLabel(p) {
-    var names = p.players.map(function(id) {
-      for (var i = 0; i < root.players.length; i++) if (root.players[i].value === id) return root.players[i].base
-      return null
-    }).filter(function(n) { return n })
-    return names.join(" + ")
+  function pickPlayer(id) {
+    setPlayerProc.command = root.backend(["set-player", id])
+    setPlayerProc.running = true
+  }
+  function deleteGroup(id) {
+    if (root.confirmDeleteId !== id) { root.confirmDeleteId = id; confirmReset.restart(); return }
+    root.confirmDeleteId = ""
+    root.groupCmd(["group-delete", id])
   }
 
   function startSleep(minutes, label) {
@@ -497,15 +498,9 @@ Panel {
           root.speakers = r.speakers || []
           root.speakersLeaderName = r.leaderName || ""
           root.speakersCanGroup = r.canGroup !== false
+          root.speakersIsGroup = r.isGroup === true
         } catch (e) {}
       }
-    }
-  }
-  Process {
-    id: presetsProc
-    command: root.backend(["presets"])
-    stdout: StdioCollector {
-      onStreamFinished: { try { var r = JSON.parse(text); if (!r.error) root.presets = r } catch (e) {} }
     }
   }
   Process {
@@ -521,11 +516,12 @@ Panel {
       }
     }
     onExited: {
-      if (lastCmd === "preset-apply") root.refreshAll()
+      if (lastCmd === "group-save" || lastCmd === "group-delete") root.refreshAll()
       speakersSoon.restart()
       root.runGroupQueue()
     }
   }
+  Timer { id: confirmReset; interval: 4000; onTriggered: root.confirmDeleteId = "" }
   Timer {
     id: speakersSoon
     interval: 1500
@@ -623,6 +619,7 @@ Panel {
             var sa = a.provider === "sendspin" ? 0 : 1, sb = b.provider === "sendspin" ? 0 : 1
             return sa !== sb ? sa - sb : a.name.localeCompare(b.name)
           })
+          root.playerEntries = list
           root.players = list.map(function(p) {
             var extra = p.isGroup ? "  (group)" : (p.members && p.members.length > 1 ? "  +" + (p.members.length - 1) : "")
             return { value: p.id, label: p.name + extra, base: p.name }
@@ -1739,30 +1736,37 @@ Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
       }
+      PanelSectionHeader {
+        visible: root.configured && !root.settingsView && root.speakersView && root.groupPlayers.length > 0
+        text: "SAVED GROUPS"
+        foreground: root.fg
+        fontFamily: root.fontFamily
+      }
       Flow {
-        visible: root.configured && !root.settingsView && root.speakersView && root.presets.length > 0
+        visible: root.configured && !root.settingsView && root.speakersView && root.groupPlayers.length > 0
         Layout.fillWidth: true
         spacing: Style.spacing.md
         Repeater {
-          model: root.presets
+          model: root.groupPlayers
           delegate: Row {
-            id: pr
+            id: gp
             required property var modelData
             spacing: 0
             Button {
-              text: pr.modelData.name
+              text: gp.modelData.name
               iconText: "󰓃"
               bordered: true
+              selected: gp.modelData.id === root.playerId
               foreground: root.fg
               fontFamily: root.fontFamily
-              tooltipText: root.presetLabel(pr.modelData)
-              onClicked: root.applyPreset(pr.modelData.name)
+              tooltipText: "Control and play on this group"
+              onClicked: root.pickPlayer(gp.modelData.id)
             }
             PanelActionButton {
-              iconText: "󰅖"
-              tooltipText: "Delete this saved group"
-              foreground: root.fg
-              onClicked: { root.groupCmd(["preset-delete", pr.modelData.name]); speakersSoon.restart() }
+              iconText: root.confirmDeleteId === gp.modelData.id ? "󰗨" : "󰅖"
+              tooltipText: root.confirmDeleteId === gp.modelData.id ? "Click again to delete this group" : "Delete this group"
+              foreground: root.confirmDeleteId === gp.modelData.id ? Color.accent : root.fg
+              onClicked: root.deleteGroup(gp.modelData.id)
             }
           }
         }
@@ -1772,21 +1776,25 @@ Panel {
         Layout.fillWidth: true
         spacing: Style.spacing.md
         TextField {
-          id: presetName
+          id: groupName
+          visible: !root.speakersIsGroup
           Layout.fillWidth: true
-          placeholderText: "Save this group as…"
+          placeholderText: "Save these speakers as a group…"
           foreground: root.fg
           font.family: root.fontFamily
-          onAccepted: root.savePreset()
+          onAccepted: root.saveGroup()
         }
+        Item { visible: root.speakersIsGroup; Layout.fillWidth: true }
         Button {
+          visible: !root.speakersIsGroup
           text: "Save"
           bordered: true
           foreground: root.fg
           fontFamily: root.fontFamily
-          onClicked: root.savePreset()
+          onClicked: root.saveGroup()
         }
         Button {
+          visible: !root.speakersIsGroup
           text: "Ungroup"
           bordered: true
           foreground: root.fg

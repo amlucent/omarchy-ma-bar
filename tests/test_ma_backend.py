@@ -605,44 +605,40 @@ class GroupingTests(unittest.TestCase):
         self.assertEqual(call.calls[0][1]["volume_level"], 100)
 
 
-class PresetTests(unittest.TestCase):
-    def test_save_replaces_same_name_and_validates(self):
-        config = {}
-        ma.save_preset(config, "Work", ["a", "b"])
-        ma.save_preset(config, "work", ["a", "c"])
-        self.assertEqual(ma.load_presets(config), [{"name": "work", "players": ["a", "c"]}])
+class SavedGroupTests(unittest.TestCase):
+    def test_save_creates_a_sync_group_after_dissolving_the_adhoc_one(self):
+        office = raw_player("o", "Office", group_childs=["o", "d"])
+        call = make_call({"players/get": office, "players/cmd/set_members": None,
+                          "players/create_group_player": {"player_id": "syncgroup_1"}})
+        out = ma.save_group("h", "t", "o", "  Work  ", ["o", "d", "d"], call=call)
+        self.assertEqual(out["id"], "syncgroup_1")
+        cmds = [c[0] for c in call.calls]
+        self.assertLess(cmds.index("players/cmd/set_members"), cmds.index("players/create_group_player"))
+        self.assertEqual(call.calls[-1][1], {"provider": "sync_group", "name": "Work",
+                                              "members": ["o", "d"], "dynamic": True})
+
+    def test_save_validates(self):
+        call = make_call({})
         with self.assertRaises(ma.MaError):
-            ma.save_preset(config, "", ["a", "b"])
+            ma.save_group("h", "t", "o", "", ["a", "b"], call=call)
         with self.assertRaises(ma.MaError):
-            ma.save_preset(config, "Solo", ["a"])
+            ma.save_group("h", "t", "o", "Solo", ["a"], call=call)
 
-    def test_delete(self):
-        config = {}
-        ma.save_preset(config, "Work", ["a", "b"])
-        ma.delete_preset(config, "WORK")
-        self.assertEqual(ma.load_presets(config), [])
-
-    def test_apply_makes_exactly_the_preset(self):
-        lead = raw_player("o", "Office", group_childs=["o", "old"])
-        table = {"players/all": [lead, raw_player("d", "Desk"), raw_player("old", "Old", synced_to="o"),
-                                  raw_player("gone", "Gone", available=False)],
-                 "players/cmd/set_members": None}
-        call = make_call(table)
-        out = ma.apply_preset("h", "t", {"name": "n", "players": ["o", "d", "gone"]}, call=call)
-        self.assertEqual((out["leader"], out["missing"]), ("o", ["gone"]))
-        self.assertEqual(call.calls[-1][1], {"target_player": "o", "player_ids_to_add": ["d"], "player_ids_to_remove": ["old"]})
-
-    def test_apply_ungroups_a_leader_that_is_a_child_elsewhere(self):
-        table = {"players/all": [raw_player("o", "Office", synced_to="z"), raw_player("d", "Desk")],
-                 "players/cmd/ungroup": None, "players/cmd/set_members": None}
-        call = make_call(table)
-        ma.apply_preset("h", "t", {"name": "n", "players": ["o", "d"]}, call=call)
-        self.assertEqual(call.calls[1], ("players/cmd/ungroup", {"player_id": "o"}))
-
-    def test_apply_with_nobody_available_errors(self):
-        call = make_call({"players/all": [raw_player("o", "Office", available=False)]})
+    def test_delete_refuses_real_speakers(self):
+        call = make_call({"players/get": raw_player("o", "Office")})
         with self.assertRaises(ma.MaError):
-            ma.apply_preset("h", "t", {"name": "n", "players": ["o"]}, call=call)
+            ma.delete_group("h", "t", "o", call=call)
+        self.assertNotIn("players/remove_group_player", [c[0] for c in call.calls])
+
+    def test_delete_removes_a_group(self):
+        call = make_call({"players/get": raw_player("g", "Work", type="group"), "players/remove_group_player": None})
+        ma.delete_group("h", "t", "g", call=call)
+        self.assertEqual(call.calls[-1], ("players/remove_group_player", {"player_id": "g"}))
+
+    def test_group_player_size_excludes_itself(self):
+        group = raw_player("g", "Work", type="group", group_childs=["o", "d"])
+        call = make_call({"players/get": group, "player_queues/get": {"queue_id": "g", "state": "idle", "current_item": None}})
+        self.assertEqual(ma.now_for_player("h", "t", "g", call=call)["groupSize"], 2)
 
 
 if __name__ == "__main__":
