@@ -369,6 +369,81 @@ def episodes(base_url, token, uri, call=api_call):
 
 # -------------------------------------------------------------------- control
 
+def queue_items(base_url, token, queue_id, limit=200, call=api_call):
+    """The play queue, in order, with the current item marked."""
+    queue = call(base_url, token, "player_queues/get", {"queue_id": queue_id})
+    items = call(base_url, token, "player_queues/items", {"queue_id": queue_id, "limit": limit, "offset": 0})
+    current = queue.get("current_index") if isinstance(queue, dict) else None
+    out = []
+    for i, qi in enumerate(items if isinstance(items, list) else []):
+        media = qi.get("media_item") or {}
+        # The item's own "index" field is not its queue position; use the
+        # position in the list the server returned.
+        out.append({
+            "id": qi.get("queue_item_id", ""),
+            "index": i,
+            "name": qi.get("name") or media.get("name", ""),
+            "subtitle": (_names(media.get("artists")) or _names(media.get("authors"))
+                         or (media.get("podcast") or {}).get("name", "")),
+            "type": media.get("media_type", ""),
+            "duration": qi.get("duration"),
+            "cover": cover_url(base_url, image_ref(qi) or image_ref(media)),
+            "current": current is not None and i == current,
+            "available": qi.get("available", True),
+        })
+    return out
+
+
+ENQUEUE_OPTIONS = {"play": "play", "next": "next", "add": "add", "replace": "replace"}
+
+
+def enqueue(base_url, token, queue_id, mode, uri, call=api_call):
+    """Put something on the queue: 'next' plays it after the current item,
+    'add' puts it at the end, 'play' starts it now, 'replace' empties the queue
+    first."""
+    option = ENQUEUE_OPTIONS.get(mode)
+    if not option:
+        raise MaError("unknown queue action: %s" % mode)
+    if not uri:
+        raise MaError("nothing to add")
+    call(base_url, token, "player_queues/play_media", {"queue_id": queue_id, "media": uri, "option": option})
+    return {"ok": True}
+
+
+def queue_remove(base_url, token, queue_id, item_id, call=api_call):
+    if not item_id:
+        raise MaError("no queue item given")
+    call(base_url, token, "player_queues/delete_item", {"queue_id": queue_id, "item_id_or_index": item_id})
+    return {"ok": True}
+
+
+def queue_move(base_url, token, queue_id, item_id, shift, call=api_call):
+    """Move an item up (negative) or down (positive) the queue by `shift`."""
+    if not item_id:
+        raise MaError("no queue item given")
+    shift = int(shift)
+    if shift == 0:
+        return {"ok": True}
+    call(base_url, token, "player_queues/move_item",
+         {"queue_id": queue_id, "queue_item_id": item_id, "pos_shift": shift})
+    return {"ok": True}
+
+
+def queue_jump(base_url, token, queue_id, target, call=api_call):
+    """Play a queue item, given its position (a number) or its queue item id."""
+    target = str(target)
+    if not target:
+        raise MaError("no queue item given")
+    call(base_url, token, "player_queues/play_index",
+         {"queue_id": queue_id, "index": int(target) if target.isdigit() else target})
+    return {"ok": True}
+
+
+def queue_clear(base_url, token, queue_id, call=api_call):
+    call(base_url, token, "player_queues/clear", {"queue_id": queue_id})
+    return {"ok": True}
+
+
 CONTROLS = {
     "playpause": ("player_queues/play_pause", lambda a: {}),
     "next": ("player_queues/next", lambda a: {}),
@@ -459,7 +534,7 @@ def main(argv):
         base, token = _need_setup()
         configured = os.environ.get("MA_PLUGIN_QUEUE") or load_config().get("playerId", "")
         queue_id = configured
-        if cmd in ("now", "play", "ctl") and not configured and not (cmd == "now" and rest):
+        if cmd in ("now", "play", "ctl", "queue", "enqueue", "queue-remove", "queue-move", "queue-jump", "queue-clear") and not configured and not (cmd == "now" and rest):
             queue_id = resolve_queue(base, token)
             if not queue_id:
                 raise MaError("no player selected and this computer has no Music Assistant player")
@@ -483,6 +558,18 @@ def main(argv):
             _emit(in_progress(base, token))
         if cmd == "recent":
             _emit(recently_played(base, token))
+        if cmd == "queue":
+            _emit(queue_items(base, token, queue_id))
+        if cmd == "enqueue":
+            _emit(enqueue(base, token, queue_id, rest[0] if rest else "", rest[1] if len(rest) > 1 else ""))
+        if cmd == "queue-remove":
+            _emit(queue_remove(base, token, queue_id, rest[0] if rest else ""))
+        if cmd == "queue-move":
+            _emit(queue_move(base, token, queue_id, rest[0] if rest else "", rest[1] if len(rest) > 1 else 0))
+        if cmd == "queue-jump":
+            _emit(queue_jump(base, token, queue_id, rest[0] if rest else 0))
+        if cmd == "queue-clear":
+            _emit(queue_clear(base, token, queue_id))
         if cmd == "play":
             _emit(play(base, token, queue_id, rest[0] if rest else ""))
         if cmd == "ctl":

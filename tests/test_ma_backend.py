@@ -201,6 +201,67 @@ class EpisodeAndHomeTests(unittest.TestCase):
         self.assertEqual([c[0] for c in call.calls], ["player_queues/get"])
 
 
+QUEUE_ITEMS = [
+    {"queue_item_id": "a1", "index": 0, "name": "First", "duration": 100, "media_item": TRACK},
+    {"queue_item_id": "b2", "index": 0, "name": "Second", "duration": 200, "media_item": AUDIOBOOK},
+    {"queue_item_id": "c3", "index": 0, "name": "Third", "duration": 300, "media_item": {}},
+]
+
+
+class QueueTests(unittest.TestCase):
+    def test_positions_come_from_the_list_not_the_items_index_field(self):
+        call = make_call({"player_queues/get": {"current_index": 1}, "player_queues/items": QUEUE_ITEMS})
+        out = ma.queue_items("http://h", "t", "q", call=call)
+        self.assertEqual([i["index"] for i in out], [0, 1, 2])
+        self.assertEqual([i["current"] for i in out], [False, True, False])
+        self.assertEqual([i["id"] for i in out], ["a1", "b2", "c3"])
+        self.assertEqual(out[0]["subtitle"], "The Band")
+
+    def test_no_current_item(self):
+        call = make_call({"player_queues/get": {"current_index": None}, "player_queues/items": QUEUE_ITEMS})
+        self.assertFalse(any(i["current"] for i in ma.queue_items("h", "t", "q", call=call)))
+
+    def test_empty_queue(self):
+        call = make_call({"player_queues/get": {}, "player_queues/items": []})
+        self.assertEqual(ma.queue_items("h", "t", "q", call=call), [])
+
+    def test_enqueue_modes(self):
+        call = make_call({"player_queues/play_media": None})
+        ma.enqueue("h", "t", "q", "next", "library://track/1", call=call)
+        ma.enqueue("h", "t", "q", "add", "library://track/2", call=call)
+        self.assertEqual(call.calls[0][1], {"queue_id": "q", "media": "library://track/1", "option": "next"})
+        self.assertEqual(call.calls[1][1]["option"], "add")
+        with self.assertRaises(ma.MaError):
+            ma.enqueue("h", "t", "q", "bogus", "u", call=call)
+        with self.assertRaises(ma.MaError):
+            ma.enqueue("h", "t", "q", "add", "", call=call)
+
+    def test_remove_and_clear(self):
+        call = make_call({"player_queues/delete_item": None, "player_queues/clear": None})
+        ma.queue_remove("h", "t", "q", "b2", call=call)
+        ma.queue_clear("h", "t", "q", call=call)
+        self.assertEqual(call.calls[0][1], {"queue_id": "q", "item_id_or_index": "b2"})
+        self.assertEqual(call.calls[1][0], "player_queues/clear")
+        with self.assertRaises(ma.MaError):
+            ma.queue_remove("h", "t", "q", "", call=call)
+
+    def test_move_direction_and_zero(self):
+        call = make_call({"player_queues/move_item": None})
+        ma.queue_move("h", "t", "q", "b2", "-1", call=call)   # negative = up
+        ma.queue_move("h", "t", "q", "b2", 0, call=call)      # nothing to do
+        self.assertEqual(len(call.calls), 1)
+        self.assertEqual(call.calls[0][1]["pos_shift"], -1)
+
+    def test_jump_by_position_or_id(self):
+        call = make_call({"player_queues/play_index": None})
+        ma.queue_jump("h", "t", "q", "2", call=call)
+        ma.queue_jump("h", "t", "q", "c3", call=call)
+        self.assertEqual(call.calls[0][1]["index"], 2)
+        self.assertEqual(call.calls[1][1]["index"], "c3")
+        with self.assertRaises(ma.MaError):
+            ma.queue_jump("h", "t", "q", "", call=call)
+
+
 class QueryTests(unittest.TestCase):
     def test_search_groups_and_skips_empty(self):
         call = make_call({"music/search": {"tracks": [TRACK], "albums": [], "audiobooks": [AUDIOBOOK],
