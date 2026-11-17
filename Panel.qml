@@ -73,9 +73,20 @@ Panel {
   property bool chaptersView: false
   property bool bookmarksView: false
   property bool sleepView: false
+  // ---- speakers / grouping ------------------------------------------------
+  property bool speakersView: false
+  property var speakers: []
+  property string speakersLeaderName: ""
+  property bool speakersCanGroup: true
+  property string speakersError: ""
+  property var presets: []
+  property var groupQueue: []
+  property double speakersHoldUntil: 0
+  property int groupSize: 1
+  readonly property int memberCount: speakers.filter(function(r) { return r.member }).length
   readonly property var sleepHost: hostWidget
   readonly property bool sleeping: sleepHost ? sleepHost.sleeping === true : false
-  readonly property bool listsHidden: queueView || chaptersView || bookmarksView || sleepView
+  readonly property bool listsHidden: queueView || chaptersView || bookmarksView || sleepView || speakersView
   property string itemUri: ""
   property string detailUri: ""
   property var chapters: []
@@ -138,11 +149,83 @@ Panel {
     root.chaptersView = name === "chapters"
     root.bookmarksView = name === "bookmarks"
     root.sleepView = name === "sleep"
+    root.speakersView = name === "speakers"
   }
   function toggleView(name) {
     var open = (name === "queue" && root.queueView) || (name === "chapters" && root.chaptersView)
       || (name === "bookmarks" && root.bookmarksView) || (name === "sleep" && root.sleepView)
+      || (name === "speakers" && root.speakersView)
     root.showView(open ? "" : name)
+  }
+
+  function loadSpeakers() {
+    if (!speakersProc.running) { speakersProc.command = root.backend(["speakers", root.playerId]); speakersProc.running = true }
+    if (!presetsProc.running) presetsProc.running = true
+  }
+  function groupCmd(args) {
+    root.groupQueue = root.groupQueue.concat([args])
+    root.runGroupQueue()
+  }
+  function runGroupQueue() {
+    if (groupProc.running || root.groupQueue.length === 0) return
+    var next = root.groupQueue[0]
+    root.groupQueue = root.groupQueue.slice(1)
+    groupProc.lastCmd = next[0]
+    groupProc.command = root.backend(next)
+    groupProc.running = true
+  }
+  function patchSpeaker(id, changes) {
+    root.speakersHoldUntil = Date.now() + 3000   // don't let a stale poll undo the click
+    root.speakers = root.speakers.map(function(r) {
+      if (r.id !== id) return r
+      var o = {}
+      for (var k in r) o[k] = r[k]
+      for (var c in changes) o[c] = changes[c]
+      return o
+    })
+  }
+  function toggleSpeaker(row) {
+    if (row.leader || !root.speakersCanGroup) return
+    root.speakersError = ""
+    root.patchSpeaker(row.id, { member: !row.member })
+    root.groupCmd(["group", root.playerId, row.member ? "remove" : "add", row.id])
+  }
+  function setSpeakerVolume(row, v) {
+    root.patchSpeaker(row.id, { volume: v })
+    root.groupCmd(["player-volume", row.id, String(Math.round(v))])
+  }
+  function toggleSpeakerMute(row) {
+    root.patchSpeaker(row.id, { muted: !row.muted })
+    root.groupCmd(["player-mute", row.id, row.muted ? "0" : "1"])
+  }
+  function ungroupAll() {
+    root.speakersError = ""
+    root.speakers = root.speakers.map(function(r) {
+      var o = {}
+      for (var k in r) o[k] = r[k]
+      if (!r.leader) o.member = false
+      return o
+    })
+    root.speakersHoldUntil = Date.now() + 3000
+    root.groupCmd(["ungroup", root.playerId])
+  }
+  function savePreset() {
+    var name = presetName.text.trim()
+    if (name === "") { root.speakersError = "Give the group a name first."; return }
+    var ids = root.speakers.filter(function(r) { return r.member }).map(function(r) { return r.id })
+    root.groupCmd(["preset-save", name].concat(ids))
+    presetName.text = ""
+  }
+  function applyPreset(name) {
+    root.speakersError = ""
+    root.groupCmd(["preset-apply", name])
+  }
+  function presetLabel(p) {
+    var names = p.players.map(function(id) {
+      for (var i = 0; i < root.players.length; i++) if (root.players[i].value === id) return root.players[i].base
+      return null
+    }).filter(function(n) { return n })
+    return names.join(" + ")
   }
 
   function startSleep(minutes, label) {
@@ -244,6 +327,8 @@ Panel {
     root.menuY = y
   }
 
+  function playersProcRun() { playersProc.running = true }
+
   function refreshAll() {
     absStatusProc.running = true
     if (!root.configured) { statusProc.running = true; return }
@@ -310,6 +395,7 @@ Panel {
 
   onTabChanged: { root.openPodcast = null; root.loadList() }
   onQueueViewChanged: if (root.queueView) root.loadQueue()
+  onSpeakersViewChanged: if (root.speakersView) root.loadSpeakers()
   onBookmarksViewChanged: if (root.bookmarksView) root.loadBookmarks()
   onAbsConfiguredChanged: if (root.bookmarksView) root.loadBookmarks()
   onQueryChanged: searchDebounce.restart()
@@ -321,7 +407,11 @@ Panel {
     interval: 2000
     running: root.opened && root.configured
     repeat: true
-    onTriggered: { root.pollNow(); if (root.queueView) root.loadQueue() }
+    onTriggered: {
+      root.pollNow()
+      if (root.queueView) root.loadQueue()
+      if (root.speakersView && Date.now() > root.speakersHoldUntil) root.loadSpeakers()
+    }
   }
   Timer { id: bookmarkReload; interval: 900; onTriggered: root.loadBookmarks() }
   Timer { id: noticeTimer; interval: 2500; onTriggered: root.notice = "" }
@@ -362,6 +452,7 @@ Panel {
           if (r.error) return
           root.state = r.state || "idle"
           root.playerId = r.id || root.playerId
+          root.groupSize = r.groupSize || 1
           root.playerName = r.player || root.playerName
           root.volume = r.volume === undefined || r.volume === null ? root.volume : r.volume
           root.speed = r.speed || 1.0
@@ -395,6 +486,57 @@ Panel {
   }
 
   Process { id: ctlProc }
+  Process {
+    id: speakersProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var r = JSON.parse(text)
+          if (r.error) { root.speakersError = r.error; return }
+          if (Date.now() < root.speakersHoldUntil) return
+          root.speakers = r.speakers || []
+          root.speakersLeaderName = r.leaderName || ""
+          root.speakersCanGroup = r.canGroup !== false
+        } catch (e) {}
+      }
+    }
+  }
+  Process {
+    id: presetsProc
+    command: root.backend(["presets"])
+    stdout: StdioCollector {
+      onStreamFinished: { try { var r = JSON.parse(text); if (!r.error) root.presets = r } catch (e) {} }
+    }
+  }
+  Process {
+    id: groupProc
+    property string lastCmd: ""
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var r = JSON.parse(text)
+          if (r.error) root.speakersError = r.error
+          else if (r.missing && r.missing.length > 0) root.notice = r.missing.length + " speaker(s) in that group are offline"
+        } catch (e) { root.speakersError = "Could not change the group" }
+      }
+    }
+    onExited: {
+      if (lastCmd === "preset-apply") root.refreshAll()
+      speakersSoon.restart()
+      root.runGroupQueue()
+    }
+  }
+  Timer {
+    id: speakersSoon
+    interval: 1500
+    onTriggered: {
+      if (root.groupQueue.length > 0 || groupProc.running) return
+      root.speakersHoldUntil = 0
+      root.pollNow()
+      root.playersProcRun()
+      if (root.speakersView) root.loadSpeakers()
+    }
+  }
   Process { id: queueActProc }
   Process { id: bookmarkActProc }
   Process {
@@ -481,7 +623,10 @@ Panel {
             var sa = a.provider === "sendspin" ? 0 : 1, sb = b.provider === "sendspin" ? 0 : 1
             return sa !== sb ? sa - sb : a.name.localeCompare(b.name)
           })
-          root.players = list.map(function(p) { return { value: p.id, label: p.name } })
+          root.players = list.map(function(p) {
+            var extra = p.isGroup ? "  (group)" : (p.members && p.members.length > 1 ? "  +" + (p.members.length - 1) : "")
+            return { value: p.id, label: p.name + extra, base: p.name }
+          })
         } catch (e) {}
       }
     }
@@ -836,7 +981,7 @@ Panel {
             Text {
               textFormat: Text.PlainText
               Layout.fillWidth: true
-              text: root.hasItem ? root.subtitle : (root.playerName !== "" ? "on " + root.playerName : "")
+              text: root.hasItem ? root.subtitle : (root.playerName !== "" ? "on " + root.playerName + (root.groupSize > 1 ? " +" + (root.groupSize - 1) : "") : "")
               color: root.mutedFg
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -895,6 +1040,12 @@ Panel {
             tooltipText: root.queueView ? "Back to the library" : "Show the play queue"
             foreground: root.queueView ? Color.accent : root.fg
             onClicked: root.toggleView("queue")
+          }
+          PanelActionButton {
+            iconText: "󰓃"
+            tooltipText: root.groupSize > 1 ? "Speakers: playing on " + root.groupSize : "Speakers and groups"
+            foreground: root.speakersView || root.groupSize > 1 ? Color.accent : root.fg
+            onClicked: root.toggleView("speakers")
           }
           PanelActionButton {
             iconText: root.sleeping ? "󰒲" : "󰤄"
@@ -1569,11 +1720,168 @@ Panel {
         onClicked: root.cancelSleep()
       }
 
+      // ---- speakers / groups ------------------------------------------------
+      PanelSectionHeader {
+        visible: root.configured && !root.settingsView && root.speakersView
+        text: "SPEAKERS" + (root.speakersLeaderName !== "" ? "  ·  " + root.speakersLeaderName.toUpperCase() + (root.memberCount > 1 ? " +" + (root.memberCount - 1) : "") : "")
+        foreground: root.fg
+        fontFamily: root.fontFamily
+      }
+      Text {
+        textFormat: Text.PlainText
+        visible: root.configured && !root.settingsView && root.speakersView
+        Layout.fillWidth: true
+        wrapMode: Text.WordWrap
+        text: root.speakersError !== "" ? root.speakersError
+          : (root.speakersCanGroup ? "Tick speakers to play on them together with " + root.speakersLeaderName + "."
+             : "This player can't be grouped. Pick another player from the list at the top.")
+        color: root.speakersError !== "" ? Color.accent : root.mutedFg
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+      Flow {
+        visible: root.configured && !root.settingsView && root.speakersView && root.presets.length > 0
+        Layout.fillWidth: true
+        spacing: Style.spacing.md
+        Repeater {
+          model: root.presets
+          delegate: Row {
+            id: pr
+            required property var modelData
+            spacing: 0
+            Button {
+              text: pr.modelData.name
+              iconText: "󰓃"
+              bordered: true
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              tooltipText: root.presetLabel(pr.modelData)
+              onClicked: root.applyPreset(pr.modelData.name)
+            }
+            PanelActionButton {
+              iconText: "󰅖"
+              tooltipText: "Delete this saved group"
+              foreground: root.fg
+              onClicked: { root.groupCmd(["preset-delete", pr.modelData.name]); speakersSoon.restart() }
+            }
+          }
+        }
+      }
+      RowLayout {
+        visible: root.configured && !root.settingsView && root.speakersView && root.memberCount > 1
+        Layout.fillWidth: true
+        spacing: Style.spacing.md
+        TextField {
+          id: presetName
+          Layout.fillWidth: true
+          placeholderText: "Save this group as…"
+          foreground: root.fg
+          font.family: root.fontFamily
+          onAccepted: root.savePreset()
+        }
+        Button {
+          text: "Save"
+          bordered: true
+          foreground: root.fg
+          fontFamily: root.fontFamily
+          onClicked: root.savePreset()
+        }
+        Button {
+          text: "Ungroup"
+          bordered: true
+          foreground: root.fg
+          fontFamily: root.fontFamily
+          onClicked: root.ungroupAll()
+        }
+      }
+      ListView {
+        id: speakerList
+        visible: root.configured && !root.settingsView && root.speakersView
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        clip: true
+        spacing: Style.spacing.xs
+        boundsBehavior: Flickable.StopAtBounds
+        model: root.speakers
+        delegate: Rectangle {
+          id: sp
+          required property var modelData
+          width: speakerList.width
+          height: Style.space(48)
+          radius: Style.cornerRadius
+          color: spMouse.containsMouse ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
+          MouseArea {
+            id: spMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: sp.modelData.leader || !root.speakersCanGroup ? Qt.ArrowCursor : Qt.PointingHandCursor
+            onClicked: root.toggleSpeaker(sp.modelData)
+          }
+          RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Style.space(12)
+            anchors.rightMargin: Style.space(6)
+            spacing: Style.spacing.lg
+            Text {
+              textFormat: Text.PlainText
+              text: sp.modelData.member ? "󰄲" : "󰄱"
+              color: sp.modelData.member ? Color.accent : root.mutedFg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.icon
+            }
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: Style.spacing.xxs
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                text: sp.modelData.name
+                color: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                elide: Text.ElideRight
+              }
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                text: (sp.modelData.leader ? "Leader  ·  " : "") + sp.modelData.provider.split("--")[0]
+                  + (sp.modelData.state === "playing" ? "  ·  playing" : "")
+                color: root.mutedFg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+            }
+            PanelSlider {
+              visible: sp.modelData.member && sp.modelData.volume !== null && sp.modelData.volume !== undefined
+              Layout.preferredWidth: Style.space(110)
+              bar: root.bar
+              minimum: 0
+              maximum: 100
+              step: 1
+              integer: true
+              value: sp.modelData.volume || 0
+              onReleased: function(v) { root.setSpeakerVolume(sp.modelData, v) }
+            }
+            Text {
+              visible: sp.modelData.member && sp.modelData.volume !== null && sp.modelData.volume !== undefined
+              Layout.preferredWidth: Style.space(30)
+              horizontalAlignment: Text.AlignRight
+              textFormat: Text.PlainText
+              text: Math.round(sp.modelData.volume || 0)
+              color: root.mutedFg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+      }
+
       // Without a visible list to fill the leftover height, a ColumnLayout
       // spreads the sections apart; this keeps them pinned to the top.
       Item {
         Layout.fillHeight: true
-        visible: !list.visible && !queueList.visible && !chapterList.visible && !bookmarkList.visible
+        visible: !list.visible && !queueList.visible && !chapterList.visible && !bookmarkList.visible && !speakerList.visible
       }
     }
 

@@ -538,5 +538,112 @@ class KeyringTests(unittest.TestCase):
             self.assertEqual(ma.load_token(), "abc")
 
 
+
+def raw_player(pid, name, **kw):
+    base = {"player_id": pid, "display_name": name, "provider": "sonos", "type": "player",
+            "available": True, "playback_state": "idle", "volume_level": 20,
+            "group_childs": [], "synced_to": None, "active_group": None,
+            "can_group_with": [], "supported_features": ["set_members", "volume_set"]}
+    base.update(kw)
+    return base
+
+
+class GroupingTests(unittest.TestCase):
+    def setUp(self):
+        self.office = raw_player("o", "Office", group_childs=["o", "d"], can_group_with=["d", "k", "x"])
+        self.desk = raw_player("d", "Desk", provider="airplay", synced_to="o")
+        self.kitchen = raw_player("k", "Kitchen")
+        self.off = raw_player("x", "Offline", available=False)
+        self.table = {"players/all": [self.desk, self.kitchen, self.off, self.office,
+                                       raw_player("g", "Group", type="group")]}
+
+    def test_leader_of_child_is_its_parent(self):
+        call = make_call({"players/get": self.desk})
+        # the fake returns the same player for both lookups; the id comes from synced_to
+        self.assertEqual(ma.leader_of("h", "t", "d", call=call)[0], "o")
+
+    def test_leader_of_unknown_player_falls_back(self):
+        call = make_call({"players/get": ma.MaError("gone")})
+        self.assertEqual(ma.leader_of("h", "t", "d", call=call), ("d", None))
+
+    def test_now_follows_the_leader_queue(self):
+        table = {"players/get": self.office, "player_queues/get": {"queue_id": "o", "state": "playing", "current_item": None}}
+        call = make_call(table)
+        out = ma.now_for_player("h", "t", "o", full=True, call=call)
+        self.assertEqual((out["leader"], out["groupSize"], out["player"]), ("o", 2, "Office"))
+
+    def test_speakers_lists_members_first_and_joinable(self):
+        out = ma.speakers("h", "t", "d", call=make_call(self.table))
+        self.assertEqual(out["leader"], "o")
+        names = [(r["name"], r["member"], r["leader"]) for r in out["speakers"]]
+        self.assertEqual(names, [("Office", True, True), ("Desk", True, False), ("Kitchen", False, False)])
+
+    def test_speakers_skips_groups_and_unavailable(self):
+        out = ma.speakers("h", "t", "o", call=make_call(self.table))
+        self.assertFalse({"g", "x"} & {r["id"] for r in out["speakers"]})
+
+    def test_group_add_and_remove(self):
+        call = make_call({"players/get": self.office, "players/cmd/set_members": None})
+        ma.group_members("h", "t", "o", add=["k"], call=call)
+        self.assertEqual(call.calls[-1][1], {"target_player": "o", "player_ids_to_add": ["k"], "player_ids_to_remove": None})
+        ma.group_members("h", "t", "o", remove=["d"], call=call)
+        self.assertEqual(call.calls[-1][1]["player_ids_to_remove"], ["d"])
+
+    def test_cannot_remove_the_leader(self):
+        call = make_call({"players/get": self.office})
+        with self.assertRaises(ma.MaError):
+            ma.group_members("h", "t", "o", remove=["o"], call=call)
+
+    def test_ungroup_removes_every_child(self):
+        call = make_call({"players/get": self.office, "players/cmd/set_members": None})
+        ma.ungroup("h", "t", "o", call=call)
+        self.assertEqual(call.calls[-1][1]["player_ids_to_remove"], ["d"])
+
+    def test_volume_is_clamped(self):
+        call = make_call({"players/cmd/volume_set": None})
+        ma.set_player_volume("h", "t", "o", 250, call=call)
+        self.assertEqual(call.calls[0][1]["volume_level"], 100)
+
+
+class PresetTests(unittest.TestCase):
+    def test_save_replaces_same_name_and_validates(self):
+        config = {}
+        ma.save_preset(config, "Work", ["a", "b"])
+        ma.save_preset(config, "work", ["a", "c"])
+        self.assertEqual(ma.load_presets(config), [{"name": "work", "players": ["a", "c"]}])
+        with self.assertRaises(ma.MaError):
+            ma.save_preset(config, "", ["a", "b"])
+        with self.assertRaises(ma.MaError):
+            ma.save_preset(config, "Solo", ["a"])
+
+    def test_delete(self):
+        config = {}
+        ma.save_preset(config, "Work", ["a", "b"])
+        ma.delete_preset(config, "WORK")
+        self.assertEqual(ma.load_presets(config), [])
+
+    def test_apply_makes_exactly_the_preset(self):
+        lead = raw_player("o", "Office", group_childs=["o", "old"])
+        table = {"players/all": [lead, raw_player("d", "Desk"), raw_player("old", "Old", synced_to="o"),
+                                  raw_player("gone", "Gone", available=False)],
+                 "players/cmd/set_members": None}
+        call = make_call(table)
+        out = ma.apply_preset("h", "t", {"name": "n", "players": ["o", "d", "gone"]}, call=call)
+        self.assertEqual((out["leader"], out["missing"]), ("o", ["gone"]))
+        self.assertEqual(call.calls[-1][1], {"target_player": "o", "player_ids_to_add": ["d"], "player_ids_to_remove": ["old"]})
+
+    def test_apply_ungroups_a_leader_that_is_a_child_elsewhere(self):
+        table = {"players/all": [raw_player("o", "Office", synced_to="z"), raw_player("d", "Desk")],
+                 "players/cmd/ungroup": None, "players/cmd/set_members": None}
+        call = make_call(table)
+        ma.apply_preset("h", "t", {"name": "n", "players": ["o", "d"]}, call=call)
+        self.assertEqual(call.calls[1], ("players/cmd/ungroup", {"player_id": "o"}))
+
+    def test_apply_with_nobody_available_errors(self):
+        call = make_call({"players/all": [raw_player("o", "Office", available=False)]})
+        with self.assertRaises(ma.MaError):
+            ma.apply_preset("h", "t", {"name": "n", "players": ["o"]}, call=call)
+
+
 if __name__ == "__main__":
     unittest.main()

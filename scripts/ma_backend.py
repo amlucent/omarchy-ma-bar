@@ -287,7 +287,22 @@ def simplify_player(player):
         "state": player.get("playback_state"),
         "volume": player.get("volume_level"),
         "muted": player.get("volume_muted"),
+        "isGroup": player.get("type") == "group",
+        "members": list(player.get("group_childs") or player.get("static_group_members") or []),
     }
+
+
+def _leader_id(player):
+    """Playback for a grouped player runs on its leader's queue."""
+    return player.get("active_group") or player.get("synced_to") or player.get("player_id", "")
+
+
+def _is_group(player):
+    return player.get("type") == "group"
+
+
+def _can_group(player):
+    return "set_members" in (player.get("supported_features") or [])
 
 
 def simplify_queue(queue, base_url=""):
@@ -331,6 +346,161 @@ def now_playing(base_url, token, queue_id, full=False, call=api_call):
             out["muted"] = player.get("volume_muted")
             out["player"] = player.get("display_name") or player.get("name", "")
     return out
+
+
+def leader_of(base_url, token, player_id, call=api_call):
+    """(leader id, leader player or None) for a player that may be in a group."""
+    try:
+        player = call(base_url, token, "players/get", {"player_id": player_id})
+    except MaError:
+        return player_id, None
+    if not isinstance(player, dict):
+        return player_id, None
+    lid = _leader_id(player) or player_id
+    if lid == player_id:
+        return lid, player
+    try:
+        leader = call(base_url, token, "players/get", {"player_id": lid})
+    except MaError:
+        leader = None
+    return lid, leader if isinstance(leader, dict) else None
+
+
+def now_for_player(base_url, token, player_id, full=False, call=api_call):
+    """Like now_playing, but follows a grouped player to its leader's queue."""
+    lid, leader = leader_of(base_url, token, player_id, call=call)
+    out = now_playing(base_url, token, lid, call=call)
+    out["id"] = player_id
+    out["leader"] = lid
+    # MA lists the leader among its own group members once a group exists.
+    out["groupSize"] = len(set([lid] + list((leader or {}).get("group_childs") or [])))
+    if full:
+        player = leader or {}
+        out["volume"] = player.get("volume_level")
+        out["muted"] = player.get("volume_muted")
+        out["player"] = player.get("display_name") or player.get("name", "")
+    return out
+
+
+def speakers(base_url, token, player_id, call=api_call):
+    """Everything the Speakers view needs: the group the selected player is in
+    and every other player that could join it."""
+    players = [p for p in call(base_url, token, "players/all") if isinstance(p, dict)]
+    by_id = {p.get("player_id"): p for p in players}
+    selected = by_id.get(player_id) or {}
+    lid = _leader_id(selected) or player_id
+    leader = by_id.get(lid) or selected
+    members = set([lid] + list(leader.get("group_childs") or []))
+    joinable = set(leader.get("can_group_with") or [])
+    rows = []
+    for p in players:
+        pid = p.get("player_id")
+        if not p.get("available") or _is_group(p):
+            continue
+        member = pid in members
+        if not (member or (pid in joinable and _can_group(p))):
+            continue
+        rows.append({
+            "id": pid,
+            "name": p.get("display_name") or p.get("name", ""),
+            "provider": p.get("provider", ""),
+            "state": p.get("playback_state"),
+            "volume": p.get("volume_level"),
+            "muted": p.get("volume_muted"),
+            "member": member,
+            "leader": pid == lid,
+        })
+    rows.sort(key=lambda r: (not r["leader"], not r["member"], r["name"].lower()))
+    return {"leader": lid, "leaderName": leader.get("display_name") or leader.get("name", ""),
+            "canGroup": _can_group(leader), "speakers": rows}
+
+
+def group_members(base_url, token, player_id, add=(), remove=(), call=api_call):
+    lid, _ = leader_of(base_url, token, player_id, call=call)
+    add, remove = [a for a in add if a and a != lid], [r for r in remove if r]
+    if lid in remove:
+        raise MaError("the leader can't be removed; ungroup instead")
+    if not add and not remove:
+        return {"ok": True, "leader": lid}
+    call(base_url, token, "players/cmd/set_members",
+         {"target_player": lid, "player_ids_to_add": add or None, "player_ids_to_remove": remove or None})
+    return {"ok": True, "leader": lid}
+
+
+def ungroup(base_url, token, player_id, call=api_call):
+    lid, leader = leader_of(base_url, token, player_id, call=call)
+    children = [c for c in ((leader or {}).get("group_childs") or []) if c != lid]
+    if children:
+        call(base_url, token, "players/cmd/set_members",
+             {"target_player": lid, "player_ids_to_add": None, "player_ids_to_remove": children})
+    return {"ok": True, "leader": lid}
+
+
+def set_player_volume(base_url, token, player_id, level, call=api_call):
+    level = max(0, min(100, int(float(level))))
+    call(base_url, token, "players/cmd/volume_set", {"player_id": player_id, "volume_level": level})
+    return {"ok": True}
+
+
+def set_player_mute(base_url, token, player_id, muted, call=api_call):
+    call(base_url, token, "players/cmd/volume_mute", {"player_id": player_id, "muted": bool(muted)})
+    return {"ok": True}
+
+
+# ------------------------------------------------------------ group presets
+# Named sets of players the user applies in one click. Only player ids and a
+# label are kept, in the local config file (never in the repo).
+
+MAX_PRESETS = 20
+
+
+def load_presets(config):
+    out = []
+    for p in config.get("groupPresets") or []:
+        if isinstance(p, dict) and isinstance(p.get("name"), str) and isinstance(p.get("players"), list):
+            out.append({"name": p["name"], "players": [str(x) for x in p["players"]]})
+    return out
+
+
+def save_preset(config, name, players):
+    name = (name or "").strip()[:40]
+    players = [p for p in dict.fromkeys(players) if p]
+    if not name:
+        raise MaError("give the preset a name")
+    if len(players) < 2:
+        raise MaError("a preset needs at least two players")
+    presets = [p for p in load_presets(config) if p["name"].lower() != name.lower()]
+    if len(presets) >= MAX_PRESETS:
+        raise MaError("too many presets; delete one first")
+    presets.append({"name": name, "players": players})
+    config["groupPresets"] = presets
+    return presets
+
+
+def delete_preset(config, name):
+    config["groupPresets"] = [p for p in load_presets(config) if p["name"].lower() != (name or "").lower()]
+    return config["groupPresets"]
+
+
+def apply_preset(base_url, token, preset, call=api_call):
+    """Make exactly these players one group. The first available player leads."""
+    players = {p.get("player_id"): p for p in call(base_url, token, "players/all") if isinstance(p, dict)}
+    wanted = [pid for pid in preset["players"] if (players.get(pid) or {}).get("available")]
+    missing = [pid for pid in preset["players"] if pid not in wanted]
+    if not wanted:
+        raise MaError("none of the preset's players are available")
+    lead = wanted[0]
+    if _leader_id(players[lead]) != lead:
+        call(base_url, token, "players/cmd/ungroup", {"player_id": lead})
+        current = []
+    else:
+        current = [c for c in (players[lead].get("group_childs") or []) if c != lead]
+    add = [pid for pid in wanted[1:] if pid not in current]
+    remove = [pid for pid in current if pid not in wanted]
+    if add or remove:
+        call(base_url, token, "players/cmd/set_members",
+             {"target_player": lead, "player_ids_to_add": add or None, "player_ids_to_remove": remove or None})
+    return {"ok": True, "leader": lead, "missing": missing}
 
 
 def search(base_url, token, query, limit=8, call=api_call):
@@ -724,10 +894,49 @@ def main(argv):
             if not queue_id:
                 raise MaError("no player selected and this computer has no Music Assistant player")
 
+        if queue_id and cmd in ("play", "ctl", "queue", "enqueue", "queue-remove", "queue-move", "queue-jump", "queue-clear", "bookmark-go"):
+            queue_id = leader_of(base, token, queue_id)[0]
+
         if cmd == "players":
             _emit(list_players(base, token))
+        if cmd == "speakers":
+            _emit(speakers(base, token, rest[0] if rest else queue_id))
+        if cmd == "group":
+            # group <player> add|remove <id>...
+            if len(rest) < 3 or rest[1] not in ("add", "remove"):
+                raise MaError("usage: group <player> add|remove <id>...")
+            ids = rest[2:]
+            _emit(group_members(base, token, rest[0], add=ids if rest[1] == "add" else (),
+                                remove=ids if rest[1] == "remove" else ()))
+        if cmd == "ungroup":
+            _emit(ungroup(base, token, rest[0] if rest else queue_id))
+        if cmd == "player-volume":
+            _emit(set_player_volume(base, token, rest[0], rest[1]))
+        if cmd == "player-mute":
+            _emit(set_player_mute(base, token, rest[0], rest[1] in ("1", "true", "yes")))
+        if cmd == "presets":
+            _emit(load_presets(load_config()))
+        if cmd == "preset-save":
+            config = load_config()
+            presets = save_preset(config, rest[0] if rest else "", rest[1:])
+            save_config(config)
+            _emit(presets)
+        if cmd == "preset-delete":
+            config = load_config()
+            presets = delete_preset(config, rest[0] if rest else "")
+            save_config(config)
+            _emit(presets)
+        if cmd == "preset-apply":
+            config = load_config()
+            found = [p for p in load_presets(config) if p["name"].lower() == (rest[0] if rest else "").lower()]
+            if not found:
+                raise MaError("no such preset")
+            result = apply_preset(base, token, found[0])
+            config["playerId"] = result["leader"]
+            save_config(config)
+            _emit(result)
         if cmd == "now":
-            _emit(now_playing(base, token, rest[0] if rest else queue_id, full=full))
+            _emit(now_for_player(base, token, rest[0] if rest else queue_id, full=full))
         if cmd == "search":
             _emit(search(base, token, " ".join(rest)))
         if cmd == "library":

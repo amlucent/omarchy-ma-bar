@@ -124,6 +124,7 @@ BarWidget {
     function chapters(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("chapters") }
     function bookmarks(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("bookmarks") }
     function sleep(minutes: int): void { root.startSleep(minutes * 60, minutes + " min") }
+    function speakers(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("speakers") }
     function sleepMenu(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("sleep") }
     function sleepCancel(): void { root.cancelSleep() }
     function library(): void { root.open(); if (panelLoader.item) panelLoader.item.showView("") }
