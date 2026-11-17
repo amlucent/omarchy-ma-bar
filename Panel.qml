@@ -63,7 +63,16 @@ Panel {
 
   // ---- queue + context menu -----------------------------------------------
   property bool queueView: false
-  property var queueRows: []
+  property var queueAll: []          // everything the server returned
+  // The playing item stays pinned at the top (it can't be moved); items that
+  // already played are left out, so every row below it is something up next.
+  readonly property int queueCurrentIndex: {
+    for (var i = 0; i < queueAll.length; i++) if (queueAll[i].current) return i
+    return -1
+  }
+  readonly property var queueRows: queueCurrentIndex < 0 ? queueAll : queueAll.slice(queueCurrentIndex)
+  readonly property int queuePlayedCount: Math.max(0, queueCurrentIndex)
+  readonly property int queueUpcoming: queueCurrentIndex < 0 ? queueAll.length : queueAll.length - queueCurrentIndex - 1
   property string notice: ""
   property var menuItem: null        // the row the context menu is open for
   property real menuX: 0
@@ -675,7 +684,7 @@ Panel {
       onStreamFinished: {
         try {
           var r = JSON.parse(text)
-          if (Array.isArray(r)) root.queueRows = r
+          if (Array.isArray(r)) root.queueAll = r
         } catch (e) {}
       }
     }
@@ -1399,7 +1408,8 @@ Panel {
         visible: root.configured && !root.settingsView && root.queueView
         Layout.fillWidth: true
         PanelSectionHeader {
-          text: "UP NEXT  ·  " + root.queueRows.length + (root.queueRows.length === 1 ? " ITEM" : " ITEMS")
+          text: "UP NEXT  ·  " + root.queueUpcoming + (root.queueUpcoming === 1 ? " ITEM" : " ITEMS")
+            + (root.queuePlayedCount > 0 ? "  ·  " + root.queuePlayedCount + " PLAYED" : "")
           foreground: root.fg
           fontFamily: root.fontFamily
         }
@@ -1417,10 +1427,11 @@ Panel {
 
       Text {
         textFormat: Text.PlainText
-        visible: root.configured && !root.settingsView && root.queueView && root.queueRows.length === 0
+        visible: root.configured && !root.settingsView && root.queueView && root.queueUpcoming === 0
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
-        text: "The queue is empty. Right-click anything in the library to play it next or add it to the queue."
+        text: (root.queueRows.length === 0 ? "The queue is empty. " : "Nothing is queued after this. ")
+          + "Right-click anything in the library to play it next or add it to the queue."
         color: root.mutedFg
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
@@ -1442,7 +1453,7 @@ Panel {
           width: queueList.width
           height: Style.space(60)
           radius: Style.cornerRadius
-          color: qMouse.containsMouse || qUp.hot || qDown.hot || qDel.hot
+          color: qMouse.containsMouse || qPlay.hot || qUp.hot || qDown.hot || qDel.hot
             ? Style.hoverFillFor(root.fg, Color.accent)
             : (modelData.current ? Style.selectedFillFor(root.fg, Color.accent) : "transparent")
 
@@ -1508,7 +1519,7 @@ Panel {
                   var parts = []
                   if (qd.modelData.subtitle !== "") parts.push(qd.modelData.subtitle)
                   if (qd.modelData.duration) parts.push(root.formatTime(qd.modelData.duration))
-                  if (qd.modelData.current) parts.push(root.playing ? "Playing" : "Current")
+                  if (qd.modelData.current) parts.push(root.playing ? "Now playing" : "Paused")
                   return parts.join("  ·  ")
                 }
                 color: root.mutedFg
@@ -1519,8 +1530,20 @@ Panel {
             }
 
             PanelActionButton {
+              id: qPlay
+              visible: !qd.modelData.current
+              iconText: "󰐊"
+              tooltipText: "Play this now"
+              foreground: root.fg
+              onClicked: root.queueAction(["queue-jump", qd.modelData.id])
+            }
+            PanelActionButton {
               id: qUp
-              visible: qd.index > 0
+              // The first item up next can't move above the one playing; "Play this now" covers that.
+              // (kept in the layout, just invisible, so the buttons stay in columns)
+              readonly property bool allowed: !qd.modelData.current && qd.index > (root.queueCurrentIndex >= 0 ? 1 : 0)
+              opacity: allowed ? 1 : 0
+              enabled: allowed
               iconText: "󰁝"
               tooltipText: "Move up"
               foreground: root.fg
@@ -1528,7 +1551,9 @@ Panel {
             }
             PanelActionButton {
               id: qDown
-              visible: qd.index < root.queueRows.length - 1
+              readonly property bool allowed: !qd.modelData.current && qd.index < root.queueRows.length - 1
+              opacity: allowed ? 1 : 0
+              enabled: allowed
               iconText: "󰁅"
               tooltipText: "Move down"
               foreground: root.fg
@@ -1536,6 +1561,7 @@ Panel {
             }
             PanelActionButton {
               id: qDel
+              visible: !qd.modelData.current
               iconText: "󰆴"
               tooltipText: "Remove from the queue"
               foreground: root.fg

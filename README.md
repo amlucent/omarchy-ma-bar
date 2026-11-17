@@ -187,8 +187,10 @@ Notes and known problems:
 
 **Queue**
 
-- The queue button shows what's up next. Click an item to jump to it, move it up or
-  down, remove it, or clear the queue.
+- The queue button shows what's up next. The item that's playing is pinned at the top
+  (it can't be moved), and items that already played are hidden. For everything below it,
+  use **play now** to jump straight to it, move it up or down, or remove it. You can also
+  clear the queue.
 - **Right-click** any album, playlist, track, audiobook or episode for **Play now**,
   **Play next** and **Add to queue**.
 
