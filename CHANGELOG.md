@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0
+
+- Shuffle and repeat (off / queue / one) and a favorite heart on the playing track or book.
+- Favorites: right-click to add or remove, and a Favorites tab.
+- Move playback to another speaker with one click (from the Speakers view).
+- Keyboard navigation: arrow keys and Enter in every list, Delete to remove, Ctrl+arrows to
+  reorder the queue, number keys and Tab to switch tabs.
+- README: comparison with the other Music Assistant plugin, documented media-key bindings.
+
 ## 0.9.1
 
 - Queue: the playing item is pinned at the top and no longer shows move/remove buttons;

@@ -58,7 +58,7 @@ plugin and Music Assistant versions.
   <tr>
     <td align="center"><img src="docs/screenshots/bookmarks.png" width="300"><br><sub><b>Bookmarks (Audiobookshelf)</b></sub></td>
     <td align="center"><img src="docs/screenshots/sleep-timer.png" width="300"><br><sub><b>Sleep timer</b></sub></td>
-    <td></td>
+    <td align="center"><img src="docs/screenshots/favorites.png" width="300"><br><sub><b>Favorites</b></sub></td>
   </tr>
 </table>
 
@@ -177,13 +177,18 @@ Notes and known problems:
 
 - Cover, title, seek bar, previous / play / next, volume, and playback speed for
   audiobooks and podcasts.
+- **Shuffle and repeat** (off / whole queue / this item) for music, and a **heart** to add
+  or remove the playing track or book from your favorites.
 - Tabs: **Home** (continue and recently played), **Albums**, **Playlists**,
-  **Books** and **Podcasts**, plus search across music, audiobooks and podcasts.
+  **Books**, **Podcasts** and **Favorites**, plus search across music, audiobooks and
+  podcasts.
+- **Favorites:** right-click an album, playlist, track, book or podcast to add it to or
+  remove it from your Music Assistant favorites; the **Favorites** tab lists them.
 - **Podcasts tab:** your unfinished episodes first, then the newest episodes across
   all your shows (with how long ago they came out), then the shows themselves.
   Click a show to see its own episodes.
 - **Continue / resume:** items you've started show time left and a progress bar.
-- Keyboard: `Space` play / pause, `/` search, `Esc` back or close.
+- Keyboard friendly, see [Keyboard](#keyboard).
 
 **Queue**
 
@@ -205,6 +210,8 @@ Notes and known problems:
   delete it (only group players can be deleted from here, never a real speaker).
   Members of a saved group can be ticked on and off like any other group.
 - Groups made in the Sonos app are picked up too.
+- **Move playback here:** the arrow button on a speaker moves the whole queue (and what is
+  playing) to that speaker.
 - **Group type:** "In sync" uses Music Assistant's Sync Group provider (built in).
   When the ticked speakers are different brands and Music Assistant's
   *Universal Group Player* provider is enabled, a "Mixed brands" type is offered;
@@ -226,6 +233,29 @@ Notes and known problems:
 - The bar shows the time left, and the timer keeps running with the dropdown
   closed. When it ends playback is **paused**, not stopped, so your queue and
   position are kept.
+
+## How this compares
+
+There is another Omarchy plugin for Music Assistant,
+[manologarciadev/omarchy.music-assistant](https://github.com/manologarciadev/omarchy.music-assistant)
+(compared at its v1.0.5). It is a solid music-focused remote, and you can reasonably pick
+either. This plugin was built around a different set of needs:
+
+| | **This plugin** | **omarchy.music-assistant** |
+| --- | --- | --- |
+| Best for | Music **plus audiobooks and podcasts**, and multi-room | Music: favorites, playlists, recents |
+| Audiobooks and podcasts | Chapters, resume, mark played, Audiobookshelf bookmarks, an unfinished-and-newest Podcasts tab | Not covered |
+| Speaker groups | Tick-to-group, per-speaker volume, saved real Music Assistant groups | Shows group members |
+| Queue | Pinned now-playing, play now, reorder, remove, clear, right-click Play now / next / Add to queue, move playback to another speaker | Click to play, remove, transfer to another player, save the queue as a playlist |
+| Sleep timer | Yes | No |
+| Favorites, shuffle, repeat | Yes | Yes |
+| Keyboard navigation | Yes | Yes |
+| Media keys | Documented bindings you add yourself | Installs Hyprland media-key bindings for you |
+| Token storage | System keyring | A `config.json` file (mode 0600) |
+| Per-player power and mute | No | Yes |
+
+Things the other plugin does that this one does not (yet): save the current queue as a
+playlist, and per-player mute / power. If those matter most to you, try it.
 
 ## Audiobookshelf (optional)
 
@@ -299,11 +329,44 @@ omarchy-shell music-assistant chapters
 omarchy-shell music-assistant bookmarks
 omarchy-shell music-assistant speakers
 omarchy-shell music-assistant library
-omarchy-shell music-assistant tab podcasts    # home | albums | playlists | audiobooks | podcasts
+omarchy-shell music-assistant tab podcasts    # home | albums | playlists | audiobooks | podcasts | favorites
 omarchy-shell music-assistant sleep 30        # pause after 30 minutes
 omarchy-shell music-assistant sleepMenu
 omarchy-shell music-assistant sleepCancel
 ```
+
+### Media keys
+
+Omarchy routes the keyboard's media keys to whatever is playing. To send them to Music
+Assistant instead, add this to `~/.config/hypr/bindings.lua` (adapted from Omarchy's own
+`media.lua`; `o.rebind` replaces the default binding). The plugin does **not** edit your
+Hyprland config for you.
+
+```lua
+o.rebind("XF86AudioPlay", "Play (Music Assistant)", "omarchy-shell music-assistant playPause", { locked = true })
+o.rebind("XF86AudioPause", "Pause (Music Assistant)", "omarchy-shell music-assistant playPause", { locked = true })
+o.rebind("XF86AudioNext", "Next (Music Assistant)", "omarchy-shell music-assistant next", { locked = true })
+o.rebind("XF86AudioPrev", "Previous (Music Assistant)", "omarchy-shell music-assistant previous", { locked = true })
+```
+
+Prefer to keep the defaults for browser and video playback? Use a different key combination
+with `o.bind` instead.
+
+### Keyboard
+
+With the dropdown open:
+
+| Key | Action |
+| --- | --- |
+| `Space` | Play / pause |
+| `/` | Search |
+| `↑` `↓` (or `k` `j`) | Move the cursor through the current list (library, queue, chapters, bookmarks, speakers) |
+| `Enter` | Open the row under the cursor: play it, jump to a queue item or chapter, tick a speaker |
+| `Delete` (or `x`) | Remove the queue item, or delete the bookmark, under the cursor |
+| `Ctrl` + `↑` `↓` | Move the queue item under the cursor up or down |
+| `1` to `6` | Jump to Home, Albums, Playlists, Books, Podcasts, Favorites |
+| `Tab` / `Shift` + `Tab` | Next / previous tab |
+| `Esc` | Back, then close |
 
 ## Troubleshooting
 
@@ -325,7 +388,8 @@ it can be prioritised:
   player above for you (install check, background service, status, test sound), so the
   Companion app is no longer needed. See the
   [tracking issue](../../issues?q=is%3Aissue+%22This+computer%22).
-- Album and artist pages, and keyboard navigation of the lists.
+- Album and artist pages.
+- Save the queue as a playlist, and per-player mute / power.
 - Pagination for very large libraries (the lists load the first 60 items today).
 - Chapters and bookmarks for podcast episodes.
 

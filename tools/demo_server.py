@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
 NOW = int(time.time())
-STATE = {"mode": "music"}
+STATE = {"mode": "music", "shuffle": False, "repeat": "off", "favorites": {"library://track/2", "library://album/3", "library://playlist/1", "library://podcast/2"}}
 
 
 # ------------------------------------------------------------------ artwork
@@ -133,8 +133,12 @@ def find(uri):
     for coll in (TRACKS, ALBUMS, PLAYLISTS, BOOKS, PODCASTS, ALL_EPISODES):
         for item in coll:
             if item["uri"] == uri:
-                return item
+                return dict(item, favorite=uri in STATE["favorites"])
     return None
+
+
+def with_fav(items):
+    return [dict(i, favorite=i["uri"] in STATE["favorites"]) for i in items]
 
 
 # ------------------------------------------------------------------ players
@@ -197,8 +201,9 @@ def now_item():
 def queue_get():
     item, elapsed, speed = now_item()
     return {"queue_id": "p_studio", "state": "playing", "elapsed_time": elapsed, "playback_speed": speed,
-            "shuffle_enabled": False, "repeat_mode": "off", "current_index": 1,
-            "current_item": {"name": item["name"], "duration": item["duration"], "media_item": item,
+            "shuffle_enabled": STATE["shuffle"], "repeat_mode": STATE["repeat"], "current_index": 1,
+            "current_item": {"name": item["name"], "duration": item["duration"],
+                             "media_item": dict(item, favorite=item["uri"] in STATE["favorites"]),
                              "image": item.get("image")}}
 
 
@@ -216,7 +221,21 @@ def search(args):
 
 
 def lib(coll):
-    return lambda args: [i for i in coll if (args.get("search") or "").lower() in i["name"].lower()]
+    def run(args):
+        items = [i for i in with_fav(coll) if (args.get("search") or "").lower() in i["name"].lower()]
+        return [i for i in items if i["favorite"]] if args.get("favorite") else items
+    return run
+
+
+def set_favorite(args, on):
+    uri = args.get("item") or "library://%s/%s" % (args.get("media_type"), args.get("library_item_id"))
+    (STATE["favorites"].add if on else STATE["favorites"].discard)(uri)
+
+
+def transfer(args):
+    src, dst = PLAYERS.get(args["source_queue_id"]), PLAYERS.get(args["target_queue_id"])
+    if src and dst:
+        src["playback_state"], dst["playback_state"] = "idle", "playing"
 
 
 def ep_by_id(args):
@@ -245,6 +264,11 @@ COMMANDS = {
     "music/podcasts/podcast_episode": ep_by_id,
     "music/podcasts/podcast_episodes": lambda a: episodes_of(int(a["item_id"])),
     "music/search": search,
+    "player_queues/shuffle": lambda a: STATE.update(shuffle=a["shuffle_enabled"]),
+    "player_queues/repeat": lambda a: STATE.update(repeat=a["repeat_mode"]),
+    "player_queues/transfer": transfer,
+    "music/favorites/add_item": lambda a: set_favorite(a, True),
+    "music/favorites/remove_item": lambda a: set_favorite(a, False),
 }
 
 BOOKMARKS = [{"libraryItemId": "demo-book-1", "time": 4360, "title": "Great line about the lamp",

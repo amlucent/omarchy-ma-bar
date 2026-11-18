@@ -50,11 +50,19 @@ Panel {
   property real position: 0
   property real volume: 0
   property real speed: 1.0
+  property int cursor: -1               // keyboard cursor row in the visible list
+  property bool returnHeld: false
+  property bool shuffle: false
+  property string repeat: "off"
+  property bool itemFavorite: false
+  property double playbackHoldUntil: 0     // ignore stale polls right after the user changes shuffle / repeat / favorite
   readonly property bool hasItem: title !== ""
+  readonly property bool canShuffle: itemType !== "audiobook" && itemType !== "podcast_episode"
+  readonly property bool canFavorite: hasItem && (itemType === "track" || itemType === "audiobook")
   readonly property bool hasSpeed: itemType === "audiobook" || itemType === "podcast_episode"
 
   // ---- browsing -----------------------------------------------------------
-  property string tab: "home"        // home | albums | playlists | audiobooks | podcasts
+  property string tab: "home"        // home | albums | playlists | audiobooks | podcasts | favorites
   property string query: ""
   property var openPodcast: null     // {uri, name} while viewing a show's episodes
   property var rows: []              // [{kind:"header"|"item", ...}]
@@ -139,7 +147,8 @@ Panel {
     { value: "albums", label: "Albums" },
     { value: "playlists", label: "Playlists" },
     { value: "audiobooks", label: "Books" },
-    { value: "podcasts", label: "Podcasts" }
+    { value: "podcasts", label: "Podcasts" },
+    { value: "favorites", label: "Favorites" }
   ]
   readonly property var tabTypes: ({ albums: "album", playlists: "playlist", audiobooks: "audiobook", podcasts: "podcast" })
   readonly property var kindTitles: ({ tracks: "Tracks", albums: "Albums", artists: "Artists", playlists: "Playlists",
@@ -254,6 +263,121 @@ Panel {
     root.groupCmd(["group-delete", id])
   }
 
+  // ---- keyboard cursor ----------------------------------------------------
+  readonly property string activeKind: (!configured || settingsView || sleepView) ? ""
+    : (queueView ? "queue" : (chaptersView ? "chapters" : (bookmarksView ? "bookmarks" : (speakersView ? "speakers" : "library"))))
+  function cursorModel() {
+    switch (root.activeKind) {
+    case "queue": return root.queueRows
+    case "chapters": return root.chapters
+    case "bookmarks": return root.bookmarks
+    case "speakers": return root.speakers
+    case "library": return root.rows
+    }
+    return []
+  }
+  function cursorOn(kind, i) { return root.cursor === i && root.activeKind === kind }
+  function cursorSelectable(i) {
+    var m = root.cursorModel()
+    if (i < 0 || i >= m.length) return false
+    if (root.activeKind === "library" && m[i].kind === "header") return false
+    return !(root.activeKind === "queue" && m[i].current)   // the playing item isn't actionable
+  }
+  function cursorView() {
+    switch (root.activeKind) {
+    case "queue": return queueList
+    case "chapters": return chapterList
+    case "bookmarks": return bookmarkList
+    case "speakers": return speakerList
+    case "library": return list
+    }
+    return null
+  }
+  function moveCursor(dy) {
+    var m = root.cursorModel()
+    if (m.length === 0) return
+    var i = root.cursor < 0 ? (dy > 0 ? 0 : m.length - 1) : root.cursor + dy
+    while (i >= 0 && i < m.length && !root.cursorSelectable(i)) i += dy
+    if (i < 0 || i >= m.length) return
+    root.cursor = i
+    var v = root.cursorView()
+    if (v) v.positionViewAtIndex(i, ListView.Contain)
+  }
+  function activateCursor() {
+    if (!root.cursorSelectable(root.cursor)) return
+    var it = root.cursorModel()[root.cursor]
+    switch (root.activeKind) {
+    case "library": root.activate(it); break
+    case "queue": root.queueAction(["queue-jump", it.id]); break
+    case "chapters": root.seekTo(it.start); break
+    case "bookmarks": root.goBookmark(it); break
+    case "speakers": root.toggleSpeaker(it); break
+    }
+  }
+  function deleteCursor() {
+    if (!root.cursorSelectable(root.cursor)) return
+    var it = root.cursorModel()[root.cursor]
+    if (root.activeKind === "queue" && !it.current) {
+      root.queueAction(["queue-remove", it.id])
+      if (root.cursor >= root.queueRows.length - 1) root.cursor = root.queueRows.length - 2
+    } else if (root.activeKind === "bookmarks") {
+      root.deleteBookmark(it)
+    }
+  }
+  function reorderCursor(dy) {
+    if (root.activeKind !== "queue" || !root.cursorSelectable(root.cursor)) return
+    var it = root.queueRows[root.cursor]
+    var first = root.queueCurrentIndex >= 0 ? 1 : 0
+    var target = root.cursor + dy
+    if (it.current || target < first || target >= root.queueRows.length) return
+    root.queueAction(["queue-move", it.id, String(dy)])
+    root.cursor = target
+  }
+  function cycleTab(direction) {
+    if (root.activeKind !== "library" || root.openPodcast) return
+    var i = 0
+    for (var k = 0; k < root.tabOptions.length; k++) if (root.tabOptions[k].value === root.tab) i = k
+    root.tab = root.tabOptions[(i + direction + root.tabOptions.length) % root.tabOptions.length].value
+  }
+  onActiveKindChanged: root.cursor = -1
+  onRowsChanged: root.cursor = -1
+
+  function toggleShuffle() {
+    root.playbackHoldUntil = Date.now() + 2500
+    root.shuffle = !root.shuffle
+    root.ctl(["shuffle", root.shuffle ? "1" : "0"])
+  }
+  function cycleRepeat() {
+    root.playbackHoldUntil = Date.now() + 2500
+    root.repeat = root.repeat === "off" ? "all" : (root.repeat === "all" ? "one" : "off")
+    root.ctl(["repeat", root.repeat])
+  }
+  function setFavorite(item, on) {
+    root.menuItem = null
+    favProc.pendingName = item.name
+    favProc.pendingOn = on
+    favProc.command = root.backend(["favorite", item.type, item.uri, on ? "on" : "off"])
+    favProc.running = true
+    root.rows = root.rows.map(function(r) {
+      if (r.kind !== "item" || r.uri !== item.uri) return r
+      var o = {}
+      for (var k in r) o[k] = r[k]
+      o.favorite = on
+      return o
+    })
+  }
+  function toggleNowFavorite() {
+    if (!root.canFavorite) return
+    root.playbackHoldUntil = Date.now() + 2500
+    root.itemFavorite = !root.itemFavorite
+    root.setFavorite({ name: root.title, type: root.itemType, uri: root.itemUri }, root.itemFavorite)
+  }
+  function moveHere(row) {
+    root.speakersError = ""
+    root.groupCmd(["transfer", row.id])
+    root.showNotice("Moving playback to " + row.name)
+  }
+
   function startSleep(minutes, label) {
     if (!root.sleepHost || !(minutes > 0)) return
     root.sleepHost.startSleep(minutes * 60, label || (Math.round(minutes) + " min"))
@@ -347,6 +471,7 @@ Panel {
     if (mode === "play") refreshSoon.restart()
   }
 
+  readonly property var favoritable: ({ track: true, album: true, playlist: true, audiobook: true, podcast: true })
   readonly property var markable: ({ audiobook: true, podcast_episode: true })
 
   function ago(sec) {
@@ -418,6 +543,7 @@ Panel {
     else if (root.query !== "") args = ["search", root.query]
     else if (root.tab === "home") args = ["home"]
     else if (root.tab === "podcasts") args = ["podcasts-home"]
+    else if (root.tab === "favorites") args = ["favorites"]
     else args = ["library", root.tabTypes[root.tab], "60", "0"]
     root.loading = true
     root.listError = ""
@@ -528,6 +654,11 @@ Panel {
           root.playerName = r.player || root.playerName
           root.volume = r.volume === undefined || r.volume === null ? root.volume : r.volume
           root.speed = r.speed || 1.0
+          if (Date.now() > root.playbackHoldUntil) {
+            root.shuffle = r.shuffle === true
+            root.repeat = r.repeat || "off"
+            root.itemFavorite = !!(r.item && r.item.favorite)
+          }
           if (r.item) {
             root.title = r.item.name || ""
             root.subtitle = r.item.subtitle || ""
@@ -558,6 +689,19 @@ Panel {
   }
 
   Process { id: ctlProc }
+  Process {
+    id: favProc
+    property string pendingName: ""
+    property bool pendingOn: true
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var failed = ""
+        try { var r = JSON.parse(text); if (r.error) failed = r.error } catch (e) { failed = "Could not update favorites" }
+        root.showNotice(failed !== "" ? failed : (favProc.pendingOn ? "Added to favorites: " : "Removed from favorites: ") + favProc.pendingName)
+        if (root.tab === "favorites") listReload.restart()
+      }
+    }
+  }
   Process {
     id: markProc
     property string pendingName: ""
@@ -602,7 +746,7 @@ Panel {
       }
     }
     onExited: {
-      if (lastCmd === "group-save" || lastCmd === "group-delete") root.refreshAll()
+      if (lastCmd === "group-save" || lastCmd === "group-delete" || lastCmd === "transfer") root.refreshAll()
       speakersSoon.restart()
       root.runGroupQueue()
     }
@@ -793,8 +937,22 @@ Panel {
     anchors.fill: parent
     blocked: searchField.activeFocus || urlField.activeFocus || tokenField.activeFocus
     onCloseRequested: { if (!root.goBack()) root.close() }
-    onActivateRequested: root.togglePause()
-    onTextKey: function(t) { if (t === "/") searchField.forceActiveFocus() }
+    reorderable: root.queueView
+    // Space always plays / pauses; Return opens the row under the keyboard cursor.
+    onReturnRequested: root.returnHeld = root.cursorSelectable(root.cursor)
+    onActivateRequested: {
+      if (root.returnHeld) { root.returnHeld = false; root.activateCursor() }
+      else root.togglePause()
+    }
+    onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
+    onReorderRequested: function(dy) { root.reorderCursor(dy) }
+    onDeleteRequested: root.deleteCursor()
+    onTabRequested: function(direction) { root.cycleTab(direction) }
+    onTextKey: function(t) {
+      if (t === "/") searchField.forceActiveFocus()
+      else if (t >= "1" && t <= String(root.tabOptions.length) && root.activeKind === "library" && !root.openPodcast)
+        root.tab = root.tabOptions[parseInt(t) - 1].value
+    }
 
     ColumnLayout {
       id: mainCol
@@ -1109,6 +1267,27 @@ Panel {
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.xl
+          PanelActionButton {
+            visible: root.canShuffle
+            iconText: "󰒟"
+            tooltipText: root.shuffle ? "Shuffle: on" : "Shuffle: off"
+            foreground: root.shuffle ? Color.accent : root.fg
+            onClicked: root.toggleShuffle()
+          }
+          PanelActionButton {
+            visible: root.canShuffle
+            iconText: root.repeat === "one" ? "󰑘" : (root.repeat === "all" ? "󰑖" : "󰑗")
+            tooltipText: root.repeat === "one" ? "Repeat: this item" : (root.repeat === "all" ? "Repeat: whole queue" : "Repeat: off")
+            foreground: root.repeat !== "off" ? Color.accent : root.fg
+            onClicked: root.cycleRepeat()
+          }
+          PanelActionButton {
+            visible: root.canFavorite
+            iconText: root.itemFavorite ? "󰋑" : "󰋕"
+            tooltipText: root.itemFavorite ? "Remove from favorites" : "Add to favorites"
+            foreground: root.itemFavorite ? Color.accent : root.fg
+            onClicked: root.toggleNowFavorite()
+          }
           Item { Layout.fillWidth: true }
           PanelActionButton { iconText: "󰒮"; tooltipText: "Previous"; foreground: root.fg; onClicked: root.ctl(["previous"]) }
           PanelActionButton {
@@ -1289,6 +1468,7 @@ Panel {
         delegate: Item {
           id: del
           required property var modelData
+          required property int index
           readonly property bool isHeader: modelData.kind === "header"
           width: list.width
           implicitHeight: isHeader ? Style.space(28) : Style.space(60)
@@ -1306,7 +1486,7 @@ Panel {
             visible: !del.isHeader
             anchors.fill: parent
             radius: Style.cornerRadius
-            color: rowMouse.containsMouse ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
+            color: rowMouse.containsMouse || root.cursorOn("library", del.index) ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
 
             RowLayout {
               anchors.fill: parent
@@ -1391,7 +1571,6 @@ Panel {
               acceptedButtons: Qt.LeftButton | Qt.RightButton
               onClicked: function(mouse) {
                 if (mouse.button === Qt.RightButton) {
-                  if (del.modelData.type === "podcast") return
                   var p = rowMouse.mapToItem(keyCatcher, mouse.x, mouse.y)
                   root.openMenu(del.modelData, p.x, p.y)
                 } else {
@@ -1453,7 +1632,7 @@ Panel {
           width: queueList.width
           height: Style.space(60)
           radius: Style.cornerRadius
-          color: qMouse.containsMouse || qPlay.hot || qUp.hot || qDown.hot || qDel.hot
+          color: qMouse.containsMouse || root.cursorOn("queue", qd.index) || qPlay.hot || qUp.hot || qDown.hot || qDel.hot
             ? Style.hoverFillFor(root.fg, Color.accent)
             : (modelData.current ? Style.selectedFillFor(root.fg, Color.accent) : "transparent")
 
@@ -1597,7 +1776,7 @@ Panel {
           height: Style.space(44)
           radius: Style.cornerRadius
           readonly property bool isCurrent: index === root.chapterIndex
-          color: cMouse.containsMouse ? Style.hoverFillFor(root.fg, Color.accent)
+          color: cMouse.containsMouse || root.cursorOn("chapters", cd.index) ? Style.hoverFillFor(root.fg, Color.accent)
             : (isCurrent ? Style.selectedFillFor(root.fg, Color.accent) : "transparent")
           Rectangle {
             visible: cd.isCurrent
@@ -1695,10 +1874,11 @@ Panel {
         delegate: Rectangle {
           id: bd
           required property var modelData
+          required property int index
           width: bookmarkList.width
           height: Style.space(52)
           radius: Style.cornerRadius
-          color: bMouse.containsMouse || bDel.hot ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
+          color: bMouse.containsMouse || root.cursorOn("bookmarks", bd.index) || bDel.hot ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
           MouseArea {
             id: bMouse
             anchors.fill: parent
@@ -1945,10 +2125,11 @@ Panel {
         delegate: Rectangle {
           id: sp
           required property var modelData
+          required property int index
           width: speakerList.width
           height: Style.space(48)
           radius: Style.cornerRadius
-          color: spMouse.containsMouse ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
+          color: spMouse.containsMouse || root.cursorOn("speakers", sp.index) ? Style.hoverFillFor(root.fg, Color.accent) : "transparent"
           MouseArea {
             id: spMouse
             anchors.fill: parent
@@ -1990,6 +2171,13 @@ Panel {
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
               }
+            }
+            PanelActionButton {
+              visible: !sp.modelData.leader
+              iconText: "󰁔"
+              tooltipText: "Move playback here"
+              foreground: root.fg
+              onClicked: root.moveHere(sp.modelData)
             }
             PanelSlider {
               visible: sp.modelData.member && sp.modelData.volume !== null && sp.modelData.volume !== undefined
@@ -2051,6 +2239,7 @@ Panel {
         anchors.margins: Style.space(6)
         spacing: Style.spacing.xxs
         Button {
+          visible: root.menuItem !== null && root.menuItem.type !== "podcast"
           width: parent.width
           leftAlign: true
           iconText: "󰐊"
@@ -2060,6 +2249,7 @@ Panel {
           onClicked: root.enqueue(root.menuItem, "play")
         }
         Button {
+          visible: root.menuItem !== null && root.menuItem.type !== "podcast"
           width: parent.width
           leftAlign: true
           iconText: "󰒭"
@@ -2069,6 +2259,7 @@ Panel {
           onClicked: root.enqueue(root.menuItem, "next")
         }
         Button {
+          visible: root.menuItem !== null && root.menuItem.type !== "podcast"
           width: parent.width
           leftAlign: true
           iconText: "󰐕"
@@ -2076,6 +2267,16 @@ Panel {
           foreground: Color.popups.text
           fontFamily: root.fontFamily
           onClicked: root.enqueue(root.menuItem, "add")
+        }
+        Button {
+          visible: root.menuItem !== null && root.favoritable[root.menuItem.type] === true
+          width: parent.width
+          leftAlign: true
+          iconText: root.menuItem && root.menuItem.favorite ? "󰋑" : "󰋕"
+          text: root.menuItem && root.menuItem.favorite ? "Remove from favorites" : "Add to favorites"
+          foreground: Color.popups.text
+          fontFamily: root.fontFamily
+          onClicked: root.setFavorite(root.menuItem, !root.menuItem.favorite)
         }
         Button {
           visible: root.menuItem !== null && root.markable[root.menuItem.type] === true

@@ -738,5 +738,54 @@ class MarkPlayedTests(unittest.TestCase):
             ma.mark_played("h", "t", "album", "library://album/1", True, call=make_call({}))
 
 
+
+class ShuffleRepeatFavoriteTests(unittest.TestCase):
+    def test_shuffle_and_repeat_controls(self):
+        call = make_call({"player_queues/shuffle": None, "player_queues/repeat": None})
+        ma.control("h", "t", "q1", "shuffle", ["1"], call=call)
+        ma.control("h", "t", "q1", "shuffle", ["0"], call=call)
+        ma.control("h", "t", "q1", "repeat", ["all"], call=call)
+        self.assertEqual(call.calls[0], ("player_queues/shuffle", {"shuffle_enabled": True, "queue_id": "q1"}))
+        self.assertEqual(call.calls[1][1]["shuffle_enabled"], False)
+        self.assertEqual(call.calls[2], ("player_queues/repeat", {"repeat_mode": "all", "queue_id": "q1"}))
+
+    def test_repeat_rejects_unknown_modes(self):
+        with self.assertRaises(ma.MaError):
+            ma.control("h", "t", "q1", "repeat", ["forever"], call=make_call({}))
+
+    def test_transfer(self):
+        call = make_call({"player_queues/transfer": None})
+        ma.transfer_queue("h", "t", "a", "b", call=call)
+        self.assertEqual(call.calls[0], ("player_queues/transfer",
+                                         {"source_queue_id": "a", "target_queue_id": "b", "auto_play": True}))
+        with self.assertRaises(ma.MaError):
+            ma.transfer_queue("h", "t", "a", "a", call=call)
+
+    def test_favorite_add_and_remove(self):
+        call = make_call({"music/favorites/add_item": None, "music/favorites/remove_item": None})
+        ma.favorite_set("h", "t", "track", "library://track/12", True, call=call)
+        self.assertEqual(call.calls[-1], ("music/favorites/add_item", {"item": "library://track/12"}))
+        ma.favorite_set("h", "t", "track", "library://track/12", False, call=call)
+        self.assertEqual(call.calls[-1][1], {"media_type": "track", "library_item_id": 12})
+
+    def test_favorite_remove_needs_a_library_item(self):
+        with self.assertRaises(ma.MaError):
+            ma.favorite_set("h", "t", "track", "plex://track/9", False, call=make_call({}))
+        with self.assertRaises(ma.MaError):
+            ma.favorite_set("h", "t", "player", "library://player/1", True, call=make_call({}))
+
+    def test_favorites_collects_sections_and_survives_one_failure(self):
+        def call(base, token, command, args=None):
+            if command == "music/albums/library_items":
+                raise ma.MaError("boom")
+            if command == "music/tracks/library_items":
+                assert args["favorite"] is True
+                return [dict(TRACK, favorite=True)]
+            return []
+        out = ma.favorites("h", "t", call=call)
+        self.assertEqual(list(out), ["tracks"])
+        self.assertTrue(out["tracks"][0]["favorite"])
+
+
 if __name__ == "__main__":
     unittest.main()

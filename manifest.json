@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "music-assistant",
   "name": "Music Assistant for Omarchy",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "author": "Tony Lucent",
   "license": "MIT",
   "description": "Control Music Assistant from the Omarchy bar: now-playing, play/pause, skip, and a dropdown to browse, search and play music, audiobooks and podcasts.",

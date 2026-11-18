@@ -282,6 +282,7 @@ def simplify(item, base_url=""):
         "duration": item.get("duration"),
         "cover": cover_url(base_url, image_ref(item)),
         "played": bool(item.get("fully_played")),
+        "favorite": bool(item.get("favorite")),
         "resume": (resume_ms / 1000.0) if isinstance(resume_ms, (int, float)) else None,
     }
 
@@ -330,6 +331,7 @@ def simplify_queue(queue, base_url=""):
             "duration": current.get("duration"),
             "type": media.get("media_type", ""),
             "uri": media.get("uri", ""),
+            "favorite": bool(media.get("favorite")),
             "subtitle": (_names(media.get("artists")) or _names(media.get("authors"))
                          or (media.get("podcast") or {}).get("name", "")),
             "cover": cover_url(base_url, image_ref(current) or image_ref(media)),
@@ -842,6 +844,12 @@ def go_to(base_url, token, queue_id, uri, seconds, call=api_call, sleep=time.sle
     return {"ok": True}
 
 
+def _repeat_mode(value):
+    if value not in ("off", "one", "all"):
+        raise ValueError(value)
+    return value
+
+
 CONTROLS = {
     "playpause": ("player_queues/play_pause", lambda a: {}),
     "next": ("player_queues/next", lambda a: {}),
@@ -850,7 +858,54 @@ CONTROLS = {
     "stop": ("player_queues/stop", lambda a: {}),
     "seek": ("player_queues/seek", lambda a: {"position": int(float(a[0]))}),
     "speed": ("player_queues/set_playback_speed", lambda a: {"speed": float(a[0])}),
+    "shuffle": ("player_queues/shuffle", lambda a: {"shuffle_enabled": a[0] in ("1", "true", "on")}),
+    "repeat": ("player_queues/repeat", lambda a: {"repeat_mode": _repeat_mode(a[0])}),
 }
+
+
+def transfer_queue(base_url, token, source_id, target_id, call=api_call):
+    """Move the queue (and what is playing) from one player to another."""
+    if not target_id or target_id == source_id:
+        raise MaError("pick a different player to move playback to")
+    call(base_url, token, "player_queues/transfer",
+         {"source_queue_id": source_id, "target_queue_id": target_id, "auto_play": True})
+    return {"ok": True}
+
+
+FAVORITE_TYPES = ("track", "album", "artist", "playlist", "audiobook", "podcast", "radio")
+
+
+def favorite_set(base_url, token, item_type, uri, on, call=api_call):
+    """Add an item to, or remove it from, the user's Music Assistant favorites."""
+    if item_type not in FAVORITE_TYPES:
+        raise MaError("that kind of item can't be a favorite")
+    provider, item_id = split_uri(uri)
+    if not provider:
+        raise MaError("that is not an item address")
+    if on:
+        call(base_url, token, "music/favorites/add_item", {"item": uri})
+    else:
+        if provider != "library":
+            raise MaError("only items in your library can be removed from favorites here")
+        call(base_url, token, "music/favorites/remove_item",
+             {"media_type": item_type, "library_item_id": int(item_id) if item_id.isdigit() else item_id})
+    return {"ok": True}
+
+
+def favorites(base_url, token, limit=40, call=api_call):
+    """Favorite tracks, albums, artists, playlists, audiobooks and podcasts."""
+    out = {}
+    for kind, plural in (("track", "tracks"), ("album", "albums"), ("artist", "artists"),
+                         ("playlist", "playlists"), ("audiobook", "audiobooks"), ("podcast", "podcasts")):
+        try:
+            items = call(base_url, token, LIBRARY_TYPES[kind],
+                         {"favorite": True, "limit": limit, "order_by": "sort_name"})
+        except MaError:
+            continue   # one provider failing shouldn't hide the rest
+        items = [i for i in (simplify(x, base_url) for x in items or []) if i]
+        if items:
+            out[plural] = items
+    return out
 
 
 def control(base_url, token, queue_id, action, extra=(), call=api_call):
@@ -965,7 +1020,7 @@ def main(argv):
         base, token = _need_setup()
         configured = os.environ.get("MA_PLUGIN_QUEUE") or load_config().get("playerId", "")
         queue_id = configured
-        if cmd in ("now", "play", "ctl", "queue", "enqueue", "queue-remove", "queue-move", "queue-jump", "queue-clear", "bookmark-go") and not configured and not (cmd == "now" and rest):
+        if cmd in ("now", "play", "ctl", "queue", "enqueue", "queue-remove", "queue-move", "queue-jump", "queue-clear", "bookmark-go", "transfer") and not configured and not (cmd == "now" and rest):
             queue_id = resolve_queue(base, token)
             if not queue_id:
                 raise NoPlayerError("no player selected and this computer has no Music Assistant player")
@@ -1020,6 +1075,23 @@ def main(argv):
             _emit(home(base, token))
         if cmd == "episodes":
             _emit(episodes(base, token, rest[0] if rest else ""))
+        if cmd == "favorites":
+            _emit(favorites(base, token))
+        if cmd == "favorite":
+            # favorite <type> <uri> on|off
+            if len(rest) < 3 or rest[2] not in ("on", "off"):
+                raise MaError("usage: favorite <type> <uri> on|off")
+            _emit(favorite_set(base, token, rest[0], rest[1], rest[2] == "on"))
+        if cmd == "transfer":
+            # transfer <target player id>: move playback here, and follow it
+            if not rest:
+                raise MaError("usage: transfer <player id>")
+            source = leader_of(base, token, queue_id)[0]
+            result = transfer_queue(base, token, source, rest[0])
+            config = load_config()
+            config["playerId"] = rest[0]
+            save_config(config)
+            _emit(result)
         if cmd == "podcasts-home":
             _emit(podcasts_home(base, token))
         if cmd == "mark":
