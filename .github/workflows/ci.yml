@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Unit tests
+        run: python -I -m unittest discover -s tests -v
+
+      - name: Check the plugin manifest
+        run: |
+          python - <<'PY'
+          import json, os, sys
+
+          manifest = json.load(open("manifest.json", encoding="utf-8"))
+          required = ["schemaVersion", "id", "name", "version", "author", "description", "kinds", "entryPoints"]
+          missing = [key for key in required if key not in manifest]
+          if missing:
+              sys.exit("manifest.json is missing: " + ", ".join(missing))
+          if manifest["id"].startswith("omarchy."):
+              sys.exit("the omarchy.* id namespace is reserved")
+          for kind, path in manifest["entryPoints"].items():
+              if not os.path.isfile(path):
+                  sys.exit("entry point for %s not found: %s" % (kind, path))
+          changelog = open("CHANGELOG.md", encoding="utf-8").read()
+          if "## " + manifest["version"] not in changelog:
+              sys.exit("CHANGELOG.md has no entry for version " + manifest["version"])
+          print("manifest OK:", manifest["id"], manifest["version"])
+          PY
+
+      - name: Keep private details out of the repository
+        run: |
+          # Screenshots and tests must only ever use made-up data. This fails the build if a
+          # token-like string or one of the maintainer's real network details sneaks in.
+          if git grep -nIE 'eyJ[A-Za-z0-9_-]{20,}|10\.0\.10\.|RINCON_[0-9A-F]{8}' -- . ':!.github'; then
+            echo "Found something that looks like a real token or private address."
+            exit 1
+          fi

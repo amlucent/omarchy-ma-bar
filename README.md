@@ -9,6 +9,7 @@
 
 <p align="center">
   <a href="https://github.com/amlucent/omarchy-ma-bar/releases"><img alt="Release" src="https://img.shields.io/github/v/release/amlucent/omarchy-ma-bar?include_prereleases&color=6b9bff"></a>
+  <a href="https://github.com/amlucent/omarchy-ma-bar/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/amlucent/omarchy-ma-bar/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-brightgreen"></a>
   <img alt="Omarchy plugin" src="https://img.shields.io/badge/Omarchy-bar%20plugin-1f2937">
   <img alt="Music Assistant" src="https://img.shields.io/badge/Music%20Assistant-2.10-18bcf2">
