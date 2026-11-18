@@ -10,7 +10,7 @@ import qs.Ui
 // kit so colours, fonts and spacing follow the current Omarchy theme.
 Panel {
   id: root
-  moduleName: "ma-bar"
+  moduleName: "io.github.amlucent.ma-bar"
   ipcTarget: "ma-bar"
   manageIpc: false
 

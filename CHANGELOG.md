@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.1
+
+- The plugin id is now `io.github.amlucent.ma-bar` (a namespaced id, as the Omarchy plugin marketplace asks for).
+  The short IPC target is unchanged: keybindings still use `omarchy-shell ma-bar ...`. If you
+  installed 0.11.0, remove it and add the plugin again.
+- README: uninstall instructions.
+
 ## 0.11.0
 
 - **Renamed to MA Bar.** The plugin id is now `ma-bar`, the repository is

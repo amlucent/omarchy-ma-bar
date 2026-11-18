@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "id": "ma-bar",
+  "id": "io.github.amlucent.ma-bar",
   "name": "MA Bar",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "author": "Tony Lucent",
   "license": "MIT",
   "description": "Control Music Assistant from the Omarchy bar: now-playing, play/pause, skip, and a dropdown to browse, search and play music, audiobooks and podcasts.",

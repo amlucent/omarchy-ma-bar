@@ -9,7 +9,7 @@ import qs.Ui
 // next item.
 BarWidget {
   id: root
-  moduleName: "ma-bar"
+  moduleName: "io.github.amlucent.ma-bar"
 
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace("file://", "")
 

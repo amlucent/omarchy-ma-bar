@@ -120,7 +120,7 @@ supported** yet and may need adjusting on your setup.
    is Music Assistant's Sendspin port, `8927` by default:
 
    ```
-   cd ~/.config/omarchy/plugins/ma-bar
+   cd ~/.config/omarchy/plugins/io.github.amlucent.ma-bar
    ~/.local/share/uv/tools/sendspin/bin/python tools/sendspin-pipewire.py ws://YOUR-SERVER:8927/sendspin
    ```
 
@@ -136,7 +136,7 @@ supported** yet and may need adjusting on your setup.
    After=network-online.target pipewire.service
 
    [Service]
-   ExecStart=%h/.local/share/uv/tools/sendspin/bin/python %h/.config/omarchy/plugins/ma-bar/tools/sendspin-pipewire.py ws://YOUR-SERVER:8927/sendspin
+   ExecStart=%h/.local/share/uv/tools/sendspin/bin/python %h/.config/omarchy/plugins/io.github.amlucent.ma-bar/tools/sendspin-pipewire.py ws://YOUR-SERVER:8927/sendspin
    Restart=on-failure
    RestartSec=5
 
@@ -282,7 +282,7 @@ user), then enter your Audiobookshelf address and the token under the gear icon 
 the dropdown, or from a terminal:
 
 ```
-cd ~/.config/omarchy/plugins/ma-bar
+cd ~/.config/omarchy/plugins/io.github.amlucent.ma-bar
 read -rs ABS_TOKEN; printf '%s\n' "$ABS_TOKEN" | python3 scripts/ma_backend.py abs-setup https://YOUR-AUDIOBOOKSHELF; unset ABS_TOKEN
 ```
 
@@ -297,7 +297,7 @@ Prefer a terminal to the connect form? The token is read without echo and sent t
 the keyring on stdin, so it never appears on a command line or in a file.
 
 ```
-cd ~/.config/omarchy/plugins/ma-bar
+cd ~/.config/omarchy/plugins/io.github.amlucent.ma-bar
 read -rs MA_TOKEN; printf '%s\n' "$MA_TOKEN" | python3 scripts/ma_backend.py setup http://YOUR-SERVER:8095; unset MA_TOKEN
 ```
 
@@ -393,6 +393,25 @@ it can be prioritised:
 - Save the queue as a playlist, and per-player mute / power.
 - Pagination for very large libraries (the lists load the first 60 items today).
 - Chapters and bookmarks for podcast episodes.
+
+## Uninstall
+
+To also forget your saved connection (the Music Assistant and Audiobookshelf tokens in the
+system keyring, and the settings file), run this first from the plugin folder:
+
+```
+cd ~/.config/omarchy/plugins/io.github.amlucent.ma-bar
+python3 scripts/ma_backend.py disconnect
+```
+
+Then remove the plugin:
+
+```
+omarchy plugin remove io.github.amlucent.ma-bar
+```
+
+If you set up the optional local player, also run
+`systemctl --user disable --now sendspin.service` and delete its unit file.
 
 ## Privacy and security
 
