@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" alt="Demo of the Music Assistant dropdown: home, podcasts, speaker groups, queue, audiobook chapters, bookmarks and the sleep timer" width="420">
+  <img src="docs/demo.gif" alt="Demo of MA Bar: shuffle and repeat, favorites, keyboard navigation, podcasts, speaker groups, queue, audiobook chapters, bookmarks and the sleep timer" width="420">
 </p>
 
 <p align="center"><sub>Demo uses made-up data. Not affiliated with or endorsed by the Music Assistant or Omarchy projects.</sub></p>
