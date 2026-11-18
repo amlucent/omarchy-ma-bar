@@ -10,8 +10,8 @@ import qs.Ui
 // kit so colours, fonts and spacing follow the current Omarchy theme.
 Panel {
   id: root
-  moduleName: "music-assistant"
-  ipcTarget: "music-assistant"
+  moduleName: "ma-bar"
+  ipcTarget: "ma-bar"
   manageIpc: false
 
   property var anchorItem: null

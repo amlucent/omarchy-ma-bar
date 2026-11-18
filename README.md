@@ -1,13 +1,14 @@
-<h1 align="center">Music Assistant for Omarchy</h1>
+<h1 align="center">MA Bar</h1>
 
 <p align="center">
-  <b>Your whole Music Assistant library, in the Omarchy bar.</b><br>
+  <b>Music Assistant in your Omarchy bar.</b><br>
+  Your whole library, one bar icon away.<br>
   Music, audiobooks and podcasts, with a play queue, multi-room speaker groups,
   chapters, bookmarks and a sleep timer.
 </p>
 
 <p align="center">
-  <a href="https://github.com/amlucent/omarchy-music-assistant/releases"><img alt="Release" src="https://img.shields.io/github/v/release/amlucent/omarchy-music-assistant?include_prereleases&color=6b9bff"></a>
+  <a href="https://github.com/amlucent/omarchy-ma-bar/releases"><img alt="Release" src="https://img.shields.io/github/v/release/amlucent/omarchy-ma-bar?include_prereleases&color=6b9bff"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-brightgreen"></a>
   <img alt="Omarchy plugin" src="https://img.shields.io/badge/Omarchy-bar%20plugin-1f2937">
   <img alt="Music Assistant" src="https://img.shields.io/badge/Music%20Assistant-2.10-18bcf2">
@@ -69,7 +70,7 @@ plugin and Music Assistant versions.
 1. **Install** and enable the plugin:
 
    ```
-   omarchy plugin add https://github.com/amlucent/omarchy-music-assistant --enable
+   omarchy plugin add https://github.com/amlucent/omarchy-ma-bar --enable
    ```
 
    If **Music Assistant** doesn't appear in the bar, add it in the shell's bar settings.
@@ -119,7 +120,7 @@ supported** yet and may need adjusting on your setup.
    is Music Assistant's Sendspin port, `8927` by default:
 
    ```
-   cd ~/.config/omarchy/plugins/music-assistant
+   cd ~/.config/omarchy/plugins/ma-bar
    ~/.local/share/uv/tools/sendspin/bin/python tools/sendspin-pipewire.py ws://YOUR-SERVER:8927/sendspin
    ```
 
@@ -135,7 +136,7 @@ supported** yet and may need adjusting on your setup.
    After=network-online.target pipewire.service
 
    [Service]
-   ExecStart=%h/.local/share/uv/tools/sendspin/bin/python %h/.config/omarchy/plugins/music-assistant/tools/sendspin-pipewire.py ws://YOUR-SERVER:8927/sendspin
+   ExecStart=%h/.local/share/uv/tools/sendspin/bin/python %h/.config/omarchy/plugins/ma-bar/tools/sendspin-pipewire.py ws://YOUR-SERVER:8927/sendspin
    Restart=on-failure
    RestartSec=5
 
@@ -281,7 +282,7 @@ user), then enter your Audiobookshelf address and the token under the gear icon 
 the dropdown, or from a terminal:
 
 ```
-cd ~/.config/omarchy/plugins/music-assistant
+cd ~/.config/omarchy/plugins/ma-bar
 read -rs ABS_TOKEN; printf '%s\n' "$ABS_TOKEN" | python3 scripts/ma_backend.py abs-setup https://YOUR-AUDIOBOOKSHELF; unset ABS_TOKEN
 ```
 
@@ -296,7 +297,7 @@ Prefer a terminal to the connect form? The token is read without echo and sent t
 the keyring on stdin, so it never appears on a command line or in a file.
 
 ```
-cd ~/.config/omarchy/plugins/music-assistant
+cd ~/.config/omarchy/plugins/ma-bar
 read -rs MA_TOKEN; printf '%s\n' "$MA_TOKEN" | python3 scripts/ma_backend.py setup http://YOUR-SERVER:8095; unset MA_TOKEN
 ```
 
@@ -320,19 +321,19 @@ python3 scripts/ma_backend.py disconnect
 The widget exposes commands you can bind in Hyprland:
 
 ```
-omarchy-shell music-assistant toggle          # open / close the dropdown
-omarchy-shell music-assistant playPause
-omarchy-shell music-assistant next
-omarchy-shell music-assistant previous
-omarchy-shell music-assistant queue           # open the queue
-omarchy-shell music-assistant chapters
-omarchy-shell music-assistant bookmarks
-omarchy-shell music-assistant speakers
-omarchy-shell music-assistant library
-omarchy-shell music-assistant tab podcasts    # home | albums | playlists | audiobooks | podcasts | favorites
-omarchy-shell music-assistant sleep 30        # pause after 30 minutes
-omarchy-shell music-assistant sleepMenu
-omarchy-shell music-assistant sleepCancel
+omarchy-shell ma-bar toggle          # open / close the dropdown
+omarchy-shell ma-bar playPause
+omarchy-shell ma-bar next
+omarchy-shell ma-bar previous
+omarchy-shell ma-bar queue           # open the queue
+omarchy-shell ma-bar chapters
+omarchy-shell ma-bar bookmarks
+omarchy-shell ma-bar speakers
+omarchy-shell ma-bar library
+omarchy-shell ma-bar tab podcasts    # home | albums | playlists | audiobooks | podcasts | favorites
+omarchy-shell ma-bar sleep 30        # pause after 30 minutes
+omarchy-shell ma-bar sleepMenu
+omarchy-shell ma-bar sleepCancel
 ```
 
 ### Media keys
@@ -343,10 +344,10 @@ Assistant instead, add this to `~/.config/hypr/bindings.lua` (adapted from Omarc
 Hyprland config for you.
 
 ```lua
-o.rebind("XF86AudioPlay", "Play (Music Assistant)", "omarchy-shell music-assistant playPause", { locked = true })
-o.rebind("XF86AudioPause", "Pause (Music Assistant)", "omarchy-shell music-assistant playPause", { locked = true })
-o.rebind("XF86AudioNext", "Next (Music Assistant)", "omarchy-shell music-assistant next", { locked = true })
-o.rebind("XF86AudioPrev", "Previous (Music Assistant)", "omarchy-shell music-assistant previous", { locked = true })
+o.rebind("XF86AudioPlay", "Play (Music Assistant)", "omarchy-shell ma-bar playPause", { locked = true })
+o.rebind("XF86AudioPause", "Pause (Music Assistant)", "omarchy-shell ma-bar playPause", { locked = true })
+o.rebind("XF86AudioNext", "Next (Music Assistant)", "omarchy-shell ma-bar next", { locked = true })
+o.rebind("XF86AudioPrev", "Previous (Music Assistant)", "omarchy-shell ma-bar previous", { locked = true })
 ```
 
 Prefer to keep the defaults for browser and video playback? Use a different key combination

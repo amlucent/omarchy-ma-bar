@@ -9,7 +9,7 @@ import qs.Ui
 // next item.
 BarWidget {
   id: root
-  moduleName: "music-assistant"
+  moduleName: "ma-bar"
 
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace("file://", "")
 
@@ -113,7 +113,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "music-assistant"
+    target: "ma-bar"
     function open(): void { root.open() }
     function close(): void { root.close() }
     function show(): void { root.open() }

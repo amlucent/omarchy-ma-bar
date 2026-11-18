@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+- **Renamed to MA Bar.** The plugin id is now `ma-bar`, the repository is
+  `amlucent/omarchy-ma-bar` (the old address redirects), and the IPC target is `ma-bar`:
+  use `omarchy-shell ma-bar ...` in keybindings. Your saved settings and keyring tokens carry
+  over unchanged. If you installed an earlier version, remove it and add the plugin again.
+
 ## 0.10.0
 
 - Shuffle and repeat (off / queue / one) and a favorite heart on the playing track or book.
