@@ -787,5 +787,95 @@ class ShuffleRepeatFavoriteTests(unittest.TestCase):
         self.assertTrue(out["tracks"][0]["favorite"])
 
 
+
+class RedirectSafetyTests(unittest.TestCase):
+    """A redirect to another host must never receive the bearer token."""
+
+    @classmethod
+    def setUpClass(cls):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        cls.seen = []
+
+        class Target(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _record(self):
+                cls.seen.append(self.headers.get("Authorization"))
+                body = b'{"ok": true}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = _record
+
+        cls.target = HTTPServer(("127.0.0.1", 0), Target)
+        target_url = "http://127.0.0.1:%d" % cls.target.server_address[1]
+
+        class Redirector(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _redirect(self):
+                if self.path.startswith("/same"):
+                    location = "/landing"            # same server
+                else:
+                    location = target_url + "/elsewhere"
+                self.send_response(307)
+                self.send_header("Location", location)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def _same_origin_landing(self):
+                if self.path == "/landing":
+                    body = b'{"landed": true}'
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self._redirect()
+
+            do_GET = do_POST = _same_origin_landing
+
+        cls.redirector = HTTPServer(("127.0.0.1", 0), Redirector)
+        cls.redirect_url = "http://127.0.0.1:%d" % cls.redirector.server_address[1]
+        for server in (cls.target, cls.redirector):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        for server in (cls.target, cls.redirector):
+            server.shutdown()
+            server.server_close()
+
+    def setUp(self):
+        self.seen.clear()
+
+    def test_api_call_refuses_a_cross_origin_redirect_without_sending_the_token(self):
+        # The redirector answers /api with a 307 to a different port, i.e. a different origin.
+        with self.assertRaises(ma.MaError) as ctx:
+            ma.api_call(self.redirect_url, "secret-token", "players/all")
+        self.assertIn("redirected", str(ctx.exception))
+        self.assertEqual(self.seen, [])
+
+    def test_abs_call_refuses_a_cross_origin_redirect_without_sending_the_token(self):
+        with self.assertRaises(ma.MaError):
+            ma.abs_call(self.redirect_url, "secret-token", "GET", "/api/me")
+        self.assertEqual(self.seen, [])
+
+    def test_same_origin_redirects_are_still_followed(self):
+        out = ma.abs_call(self.redirect_url, "secret-token", "GET", "/same/start")
+        self.assertEqual(out, {"landed": True})
+
+    def test_origin_compares_scheme_host_and_port(self):
+        self.assertEqual(ma._origin("https://Example.com/x"), ma._origin("https://example.com:443/y"))
+        self.assertNotEqual(ma._origin("http://example.com"), ma._origin("https://example.com"))
+        self.assertNotEqual(ma._origin("http://a.test:8095"), ma._origin("http://a.test:8096"))
+
+
 if __name__ == "__main__":
     unittest.main()

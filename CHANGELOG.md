@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.2
+
+- **Security:** requests to Music Assistant and Audiobookshelf no longer follow a redirect to
+  a different host (scheme, host or port), so the bearer token can never be forwarded to a
+  server other than the one you configured. Same-server redirects still work, and a blocked
+  redirect shows a clear message asking you to use the address it redirects to. Reported in
+  the marketplace review; covered by new tests that run two local servers.
+
 ## 0.11.1
 
 - The plugin id is now `io.github.amlucent.ma-bar` (a namespaced id, as the Omarchy plugin marketplace asks for).

@@ -17,7 +17,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 KEYRING_SERVICE = "omarchy-music-assistant"
 KEYRING_ACCOUNT = "api-token"
@@ -161,7 +161,37 @@ def read_limited(response, limit=MAX_BYTES, deadline_s=DEADLINE_S):
     return b"".join(chunks)
 
 
-def api_call(base_url, token, command, args=None, opener=urlopen):
+def _origin(url):
+    parts = urlsplit(url)
+    port = parts.port or {"http": 80, "https": 443}.get(parts.scheme)
+    return (parts.scheme, (parts.hostname or "").lower(), port)
+
+
+class _SameOriginRedirects(HTTPRedirectHandler):
+    """Follow redirects only within the server the user configured.
+
+    urllib copies a request's headers, including Authorization, onto the redirected
+    request, so a redirect to another host would hand it our bearer token. Declining
+    the redirect makes the caller see the 3xx response instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if _origin(req.full_url) != _origin(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = build_opener(_SameOriginRedirects)
+
+
+def safe_urlopen(req, timeout=None):
+    return _OPENER.open(req, timeout=timeout)
+
+
+REDIRECT_MESSAGE = ("the server redirected to a different address; change the address in the "
+                    "settings to the one it redirects to (for example its https address)")
+
+
+def api_call(base_url, token, command, args=None, opener=safe_urlopen):
     """POST one command to /api and return the decoded JSON result."""
     body = json.dumps({"message_id": "omarchy", "command": command, "args": args or {}})
     req = Request(
@@ -174,6 +204,8 @@ def api_call(base_url, token, command, args=None, opener=urlopen):
         with opener(req, timeout=TIMEOUT_S) as resp:
             raw = read_limited(resp)
     except HTTPError as err:
+        if 300 <= err.code < 400:
+            raise MaError(REDIRECT_MESSAGE)
         if err.code in (401, 403):
             raise MaError("the server rejected the token (create a new long-lived token)")
         if err.code >= 500:
@@ -190,7 +222,7 @@ def api_call(base_url, token, command, args=None, opener=urlopen):
         raise MaError("the server sent a response I could not read")
 
 
-def abs_call(base_url, token, method, path, body=None, opener=urlopen):
+def abs_call(base_url, token, method, path, body=None, opener=safe_urlopen):
     """One request to an Audiobookshelf server; returns decoded JSON (or None)."""
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"Authorization": "Bearer " + token}
@@ -201,6 +233,8 @@ def abs_call(base_url, token, method, path, body=None, opener=urlopen):
         with opener(req, timeout=TIMEOUT_S) as resp:
             raw = read_limited(resp)
     except HTTPError as err:
+        if 300 <= err.code < 400:
+            raise MaError(REDIRECT_MESSAGE)
         if err.code in (401, 403):
             raise MaError("Audiobookshelf rejected the token")
         if err.code == 404:
@@ -796,7 +830,7 @@ def with_resume(base_url, token, items, call=api_call):
         return list(pool.map(fill, items))
 
 
-def abs_bookmarks(abs_url, abs_token, abs_id, opener=urlopen):
+def abs_bookmarks(abs_url, abs_token, abs_id, opener=safe_urlopen):
     me = abs_call(abs_url, abs_token, "GET", "/api/me", opener=opener)
     marks = [b for b in (me or {}).get("bookmarks") or [] if b.get("libraryItemId") == abs_id]
     marks.sort(key=lambda b: b.get("time", 0))
@@ -810,7 +844,7 @@ def fmt_time(seconds):
     return "%d:%02d:%02d" % (h, m, s) if h else "%d:%02d" % (m, s)
 
 
-def abs_add_bookmark(abs_url, abs_token, abs_id, seconds, title="", opener=urlopen):
+def abs_add_bookmark(abs_url, abs_token, abs_id, seconds, title="", opener=safe_urlopen):
     seconds = int(float(seconds))
     title = (title or "").strip() or "Bookmark @ " + fmt_time(seconds)
     abs_call(abs_url, abs_token, "POST", "/api/me/item/%s/bookmark" % quote(abs_id, safe=""),
@@ -818,7 +852,7 @@ def abs_add_bookmark(abs_url, abs_token, abs_id, seconds, title="", opener=urlop
     return {"ok": True, "time": seconds, "title": title}
 
 
-def abs_delete_bookmark(abs_url, abs_token, abs_id, seconds, opener=urlopen):
+def abs_delete_bookmark(abs_url, abs_token, abs_id, seconds, opener=safe_urlopen):
     abs_call(abs_url, abs_token, "DELETE",
              "/api/me/item/%s/bookmark/%d" % (quote(abs_id, safe=""), int(float(seconds))), opener=opener)
     return {"ok": True}

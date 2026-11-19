@@ -420,7 +420,8 @@ If you set up the optional local player, also run
   (`~/.config/omarchy-music-assistant/config.json`) holds just the server addresses and
   your chosen player.
 - The plugin talks only to the Music Assistant (and, if you connect it, Audiobookshelf)
-  addresses you give it.
+  addresses you give it. It will not follow a redirect to a different
+  host, so your tokens are never sent anywhere else.
 - Artwork addresses returned by some providers can embed access tokens; the plugin does
   not log them.
 
